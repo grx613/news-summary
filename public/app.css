@@ -249,3 +249,33 @@ details.cat > summary:hover h2 { color: var(--accent); }
   .div-table th:last-child, .div-table td:last-child { display: none; }
   .div-amount { font-size: 25px; }
 }
+
+/* Индексы: значение крупно, график — свой SVG, таблицы те же, что у дивидендов */
+.idx-value { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 6px; }
+.idx-num { font-size: 40px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -.5px; }
+.idx-num span { font-size: 17px; font-weight: 400; color: var(--muted); margin-left: 6px; }
+.idx-delta { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--muted); }
+.idx-delta.up, .idx-table .up { color: var(--green); }
+.idx-delta.down, .idx-table .down { color: var(--red); }
+.idx-chart { margin-top: 18px; }
+.idx-chart svg { width: 100%; height: 190px; display: block; }
+.idx-chart-axis { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; margin-top: 6px; font-variant-numeric: tabular-nums; }
+/* У индексных таблиц последняя колонка — смысловая (вес бумаги), её не прячем
+   на узком экране, в отличие от календаря дивидендов */
+.idx-table th:last-child, .idx-table td:last-child { display: table-cell; }
+@media (max-width: 640px) {
+  .idx-num { font-size: 30px; }
+  .idx-chart svg { height: 140px; }
+  .idx-table th:last-child, .idx-table td:last-child { display: table-cell; }
+}
+
+/* Строка индексов на главной: шесть значений в одну линию, без графиков */
+.idx-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 2px; margin-top: 12px; }
+.idx-cell { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 10px; text-decoration: none; color: var(--text); border: 1px solid transparent; }
+.idx-cell:hover { background: var(--card2); border-color: var(--border); }
+.idx-cell-name { color: var(--muted); font-size: 12.5px; }
+.idx-cell-val { font-size: 19px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.idx-cell-chg { font-size: 12.5px; font-variant-numeric: tabular-nums; color: var(--muted); }
+.idx-cell-chg.up { color: var(--green); }
+.idx-cell-chg.down { color: var(--red); }
+.idx-home h2 .cnt { font-size: 13px; color: var(--muted); font-weight: 400; }

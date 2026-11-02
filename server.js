@@ -7,6 +7,9 @@ import { buildUniverse, getUniverse, loadedUniverse, currentUniverse } from './l
 import { createCrawler } from './lib/crawler.js';
 import { createDividendStore } from './lib/dividends.js';
 import { createDividendCrawler } from './lib/dividend-crawler.js';
+import { INDEXES, bySlug, createIndexStore } from './lib/indices.js';
+import { createIndexCrawler } from './lib/index-crawler.js';
+import { indexPage, indicesPage, homeIndices } from './lib/index-render.js';
 import {
   SITE_NAME,
   MARKET_LABEL,
@@ -108,6 +111,7 @@ const CACHE_FILE = path.join(DATA_DIR, 'cache.json');
 const UNIVERSE_FILE = path.join(DATA_DIR, 'universe.json');
 const QUESTIONS_FILE = path.join(DATA_DIR, 'questions.json');
 const DIVIDENDS_FILE = path.join(DATA_DIR, 'dividends.json');
+const INDICES_FILE = path.join(DATA_DIR, 'indices.json');
 const FORUM_FILE = path.join(DATA_DIR, 'forum.json');
 const FORUM_SECRET_FILE = path.join(DATA_DIR, 'forum-secret.key');
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -1108,6 +1112,17 @@ const dividendCrawler = createDividendCrawler({
   log,
 });
 
+// Индексы — тоже бесплатные справочные данные, но, в отличие от дивидендов,
+// значение меняется весь торговый день. Поэтому свой крон с коротким интервалом:
+// история и состав раз в сутки, значения — каждые несколько минут.
+const indexStore = createIndexStore(INDICES_FILE, { log });
+const indexCrawler = createIndexCrawler({
+  store: indexStore,
+  enabled: CRAWLER.enabled && process.env.INDICES_ENABLED !== '0',
+  quoteMs: (Number(process.env.INDICES_QUOTE_MIN) || 5) * 60_000,
+  log,
+});
+
 const crawler = createCrawler({
   cfg: CRAWLER,
   log,
@@ -1152,6 +1167,16 @@ function assetByKey() {
   const map = new Map();
   for (const a of universeItems()) map.set(`${a.market}:${a.symbol}`, a);
   return map;
+}
+
+// Тикеры, у которых есть страница: состав индекса ссылается только на них,
+// чтобы список не вёл в 404. Кеш тоже считается — записи о бумагах,
+// выпавших из дневного списка, продолжают жить
+function knownSymbols() {
+  const set = new Set();
+  for (const a of universeItems()) set.add(a.symbol);
+  for (const rec of Object.values(cache)) if (rec?.asset?.symbol) set.add(rec.asset.symbol);
+  return set;
 }
 
 function marketGroups() {
@@ -1386,6 +1411,7 @@ const server = http.createServer(async (req, res) => {
         cooldownMin: REFRESH_COOLDOWN_MS / 60000,
         crawler: crawler.status(),
         dividends: dividendCrawler.status(),
+        indices: indexCrawler.status(),
       });
     }
 
@@ -1398,6 +1424,12 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/sitemap.xml') {
       const paths = ['/', '/catalog', '/catalog/ru', '/catalog/us', '/catalog/crypto'];
       if (dividendCrawler.status().stored) paths.push('/dividends');
+      // Индексы попадают в карту только со значениями: страница из одних прочерков
+      // поисковику бесполезна, а после первого прохода крона значения есть всегда
+      if (indexCrawler.status().stored) {
+        paths.push('/indices');
+        for (const i of INDEXES) paths.push(`/index/${i.slug}`);
+      }
       for (const a of universeItems()) paths.push(tickerPath(a));
       for (const rec of Object.values(cache)) {
         const p = tickerPath(rec.asset);
@@ -1417,6 +1449,7 @@ const server = http.createServer(async (req, res) => {
       // а не весь сайт целиком. Вопросы и темы несут свою дату создания.
       const mod = new Map();
       if (dividendCrawler.status().lastRunAt) mod.set('/dividends', dividendCrawler.status().lastRunAt);
+      if (indexCrawler.status().lastQuotesAt) mod.set('/indices', indexCrawler.status().lastQuotesAt);
       for (const rec of Object.values(cache)) {
         const p = tickerPath(rec.asset);
         if (rec.generatedAt) mod.set(p, rec.generatedAt);
@@ -1431,6 +1464,9 @@ const server = http.createServer(async (req, res) => {
       for (const q of questionStore.all()) {
         if (q.asset && q.askedAt) mod.set(questionPath(q.asset, q), q.askedAt);
       }
+      // Значения индексов обновляются чаще всего остального на сайте
+      const quotesAt = indexStore.quotesAt();
+      if (quotesAt) for (const i of INDEXES) mod.set(`/index/${i.slug}`, quotesAt);
       if (FORUM_ENABLED) {
         for (const t of forumStore.threads()) if (t.createdAt) mod.set(threadPath(t), t.createdAt);
       }
@@ -1608,6 +1644,40 @@ ${[...new Set(paths)]
       return sendHtml(res, dividendsPage({ items, siteUrl: SITE_URL, siteName: SITE_NAME }), {
         cache: 'public, max-age=3600',
       });
+    }
+
+    // ------------------------------------------------------------ индексы
+    // Значения читаются из своего файла: страница не ходит в сеть и открывается
+    // мгновенно даже при холодном старте сервиса.
+    if (url.pathname === '/indices' || url.pathname === '/indices/') {
+      // Пока крон не собрал значения, страница состояла бы из прочерков:
+      // отдаём 404, как у дивидендов, чтобы пустое не попало в индекс
+      if (!indexCrawler.status().stored) {
+        return sendHtml(res, notFoundPage({ siteUrl: SITE_URL, siteName: SITE_NAME }), { status: 404, cache: 'no-store' });
+      }
+      return sendHtml(res, indicesPage({ quotes: indexStore.all(), history: indexStore.allHistory(), siteUrl: SITE_URL, siteName: SITE_NAME }), {
+        cache: 'public, max-age=120',
+      });
+    }
+
+    if (url.pathname.startsWith('/index/')) {
+      const idx = bySlug(decodeURIComponent(url.pathname.split('/')[2] || ''));
+      if (!idx || !indexCrawler.status().stored) {
+        return sendHtml(res, notFoundPage({ siteUrl: SITE_URL, siteName: SITE_NAME }), { status: 404, cache: 'no-store' });
+      }
+      return sendHtml(
+        res,
+        indexPage({
+          idx,
+          quote: indexStore.quote(idx.code),
+          history: indexStore.history(idx.code),
+          composition: indexStore.composition(idx.code),
+          knownSymbols: knownSymbols(),
+          siteUrl: SITE_URL,
+          siteName: SITE_NAME,
+        }),
+        { cache: 'public, max-age=120' }
+      );
     }
 
     // ------------------------------------------------------------ вопрос по тикеру
@@ -1904,7 +1974,14 @@ ${[...new Set(paths)]
       const refreshedAt = recent.length ? recent[0].generatedAt : null;
       return sendHtml(
         res,
-        homePage({ siteUrl: SITE_URL, siteName: SITE_NAME, groups, cached: recent, refreshedAt })
+        homePage({
+          siteUrl: SITE_URL,
+          siteName: SITE_NAME,
+          groups,
+          cached: recent,
+          refreshedAt,
+          indicesHtml: homeIndices({ quotes: indexStore.all(), siteUrl: SITE_URL }),
+        })
       );
     }
 
@@ -1928,4 +2005,5 @@ server.listen(PORT, HOST, () => {
   if (CRAWLER.enabled) crawler.start();
   else log('крон выключен (CRAWLER_ENABLED=0)');
   dividendCrawler.start();
+  indexCrawler.start();
 });
