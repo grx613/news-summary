@@ -155,13 +155,10 @@ details.cat > summary:hover h2 { color: var(--accent); }
 .meta-nick::before { content: 'вы вошли как '; }
 .meta-nick::after { content: ' · '; }
 
-/* тема в списке — та же сетка, что у вопросов аналитику */
-.post-item .qa-q { line-height: 1.4; }
-.post-item .post-meta { margin-top: 8px; }
-
 .post-list { margin-top: 4px; }
 .post { padding: 14px 0; border-top: 1px solid var(--border); }
-.post-nest { border-left: 2px solid var(--border); padding-left: 12px; margin-top: 10px; }
+.post-nest { border-left: 2px solid var(--border); padding-left: 12px; margin-top: 10px; margin-left: calc(var(--d, 1) * 22px); }
+.post-cnt { color: var(--muted); font-variant-numeric: tabular-nums; }
 .post-target { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
 
 .forum-new { margin-top: 18px; }
@@ -314,3 +311,33 @@ details.cat > summary:hover h2 { color: var(--accent); }
    насколько длинный ответ или сколько ответов в ветке, не открывая её */
 .qa-cnt { color: var(--muted); font-weight: 400; font-variant-numeric: tabular-nums; font-size: 13px; }
 .qa-item:hover .qa-cnt { color: var(--muted); }
+
+/* Дерево обсуждения на странице тикера: строка темы, под ней с отступом
+   ответы, ответ на ответ — глубже. Плотная сетка, как на старых досках:
+   в одну строку умещается заголовок, просмотры и автор */
+.ftree { margin-top: 16px; border-top: 1px solid var(--border); }
+.ftree-row {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  padding: 5px 0; font-size: 14px; line-height: 1.45;
+  color: var(--text); text-decoration: none; border-bottom: 1px solid rgba(48,54,61,.5);
+}
+a.ftree-row:hover { background: var(--card2); }
+a.ftree-row:hover .ft-text { color: var(--accent); }
+.ftree-row.root { font-weight: 600; }
+/* Шаг отступа задаёт разметка (--d), ширину шага — здесь: на телефоне он меньше */
+.ftree-row[style] { margin-left: calc(var(--d, 0) * 18px); }
+/* Прочерк вместо текста: сообщение пустое, открывать нечего — и ссылки нет */
+.ftree-row.empty { color: var(--muted); }
+.ft-empty { font-style: normal; color: var(--muted); }
+.ft-text { flex: 1 1 320px; min-width: 0; overflow-wrap: break-word; }
+.ft-cnt { color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.ft-by { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
+.ft-nick { color: var(--text); font-weight: 500; }
+.ft-date { font-variant-numeric: tabular-nums; }
+
+@media (max-width: 640px) {
+  /* На телефоне отступ в 18px на глубине съедает ширину: уменьшаем вдвое */
+  .ftree-row { font-size: 13.5px; padding: 6px 0; }
+  .ftree-row[style] { margin-left: calc(var(--d, 0) * 11px); }
+  .ft-by { white-space: normal; }
+}

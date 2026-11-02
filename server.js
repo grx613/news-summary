@@ -1222,9 +1222,6 @@ function relatedAssets(asset, limit = 10) {
 
 // Число ответов по каждой теме тикера: список на странице показывает счётчик,
 // а сам счётчик считается по всему поддереву, поэтому берём его из хранилища
-const forumCounts = (ticker) =>
-  Object.fromEntries(forumStore.threads(ticker).map((t) => [t.id, forumStore.replyCount(t.id)]));
-
 // Блок обсуждения на странице тикера. Рендерер получает готовый HTML,
 // чтобы lib/render.js не тянул за собой lib/forum-render.js и не замыкал импорт
 const forumHtmlFor = (asset, user, { notice = '', error = '', title = '', body = '' } = {}) => {
@@ -1234,7 +1231,8 @@ const forumHtmlFor = (asset, user, { notice = '', error = '', title = '', body =
     me: user.me,
     account: user.account,
     threads: forumStore.threads(cacheKey(asset)).slice(0, 20),
-    counts: forumCounts(cacheKey(asset)),
+    // Дерево строит рендерер, поэтому ему нужны все сообщения тикера, а не только корни
+    messages: forumStore.messagesOf(cacheKey(asset)),
     notice,
     error,
     title,
@@ -1878,12 +1876,11 @@ ${[...new Set(paths)]
           };
           const cand = wantParent ? forumStore.byId(wantParent) : null;
           const parentRec = cand && !cand.hidden && inThread(cand) ? cand : null;
-          const depth = parentRec ? Math.min((parentRec.depth || 0) + 1, 3) : 0;
-
+          // Глубину не храним: родитель и так записан, а поле depth расходилось
+          // с реальной цепочкой (у ответов оставался 0) и рисовало ветку плоско
           const created = forumStore.addMessage({
             ticker: thread.ticker,
             parent: parentRec ? parentRec.id : thread.id,
-            depth,
             body,
             nick: user.account.nick,
             key: user.key,
@@ -1894,15 +1891,20 @@ ${[...new Set(paths)]
           return redirect(res, `${threadPath(thread)}#m${created.id}`);
         }
 
-        // Просмотры считаем в памяти: на счётчик не влияет точность, а запись на диск лишняя
-        thread.views = (thread.views || 0) + 1;
+        // Просмотр засчитываем тому сообщению, на которое пришли: в дереве
+        // ссылка несёт ?view=<id>. Отдельно от ?to=<id>, который открывает форму
+        // ответа: пришли читать — не то же самое, что пришли отвечать.
+        // Считать показ всей ветки всем её строкам бессмысленно — было бы одно число
+        const replies = forumStore.replies(thread.id);
+        const viewMsg = Number(url.searchParams.get('view')) || Number(url.searchParams.get('to')) || 0;
+        forumStore.addView(replies.some((r) => r.id === viewMsg) ? viewMsg : thread.id);
         return sendHtml(
           res,
           threadPage({
             siteUrl: SITE_URL,
             asset,
             thread,
-            replies: forumStore.replies(thread.id),
+            replies,
             me: user.me,
             account: user.account,
             to: Number(url.searchParams.get('to')) || 0,
