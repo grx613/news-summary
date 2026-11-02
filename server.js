@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { get, stripTags, norm, decodeEntities } from './lib/http.js';
 import { buildUniverse, getUniverse, loadedUniverse, currentUniverse } from './lib/universe.js';
 import { createCrawler } from './lib/crawler.js';
+import { createDividendStore } from './lib/dividends.js';
+import { createDividendCrawler } from './lib/dividend-crawler.js';
 import {
   SITE_NAME,
   MARKET_LABEL,
@@ -16,6 +18,7 @@ import {
   catalogPage,
   tickerPage,
   questionPage,
+  dividendsPage,
   notFoundPage,
 } from './lib/render.js';
 import {
@@ -104,6 +107,7 @@ const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const CACHE_FILE = path.join(DATA_DIR, 'cache.json');
 const UNIVERSE_FILE = path.join(DATA_DIR, 'universe.json');
 const QUESTIONS_FILE = path.join(DATA_DIR, 'questions.json');
+const DIVIDENDS_FILE = path.join(DATA_DIR, 'dividends.json');
 const FORUM_FILE = path.join(DATA_DIR, 'forum.json');
 const FORUM_SECRET_FILE = path.join(DATA_DIR, 'forum-secret.key');
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -1089,6 +1093,21 @@ function saveCrawlerState() {
 
 const crawlerState = loadCrawlerState();
 
+// Дивиденды живут своим файлом и своим кроном: новостной пишет cache.json и тратит
+// деньги на модель, а это справочные данные из бесплатных источников.
+const dividendStore = createDividendStore(DIVIDENDS_FILE, { log });
+const dividendCrawler = createDividendCrawler({
+  store: dividendStore,
+  // Список уже загружен при старте: сеть для него не нужна, а дивиденды
+  // не должны ждать, пока новостной крон соберёт вселенную заново
+  listUniverse: async () => currentUniverse() || (await getUniverse(CRAWLER, log)),
+  // Тестовая копия не должна ходить по сети: гасим её тем же CRAWLER_ENABLED=0,
+  // а отдельный флаг оставлен, чтобы можно было выключить только дивиденды
+  enabled: CRAWLER.enabled && process.env.DIVIDENDS_ENABLED !== '0',
+  intervalMs: (Number(process.env.DIVIDENDS_INTERVAL_HOURS) || 24) * 3600_000,
+  log,
+});
+
 const crawler = createCrawler({
   cfg: CRAWLER,
   log,
@@ -1121,6 +1140,18 @@ try {
 // видят пустую оболочку, потому что весь контент раньше собирался в браузере.
 function universeItems() {
   return currentUniverse()?.items || [];
+}
+
+// Дивиденды ключуются как кеш: MARKET:SYMBOL. Отдаём только то, что уже собрано —
+// страница не должна ждать сеть, а крон догонит на первом проходе
+const dividendFor = (asset) => dividendStore.get(`${asset.market}:${asset.symbol}`);
+
+// Ключ -> актив: нужен сводной странице и карте сайта, где дивиденды приходят
+// отдельным списком без ссылки на бумагу
+function assetByKey() {
+  const map = new Map();
+  for (const a of universeItems()) map.set(`${a.market}:${a.symbol}`, a);
+  return map;
 }
 
 function marketGroups() {
@@ -1354,6 +1385,7 @@ const server = http.createServer(async (req, res) => {
         generationsLastHour: genLog.length,
         cooldownMin: REFRESH_COOLDOWN_MS / 60000,
         crawler: crawler.status(),
+        dividends: dividendCrawler.status(),
       });
     }
 
@@ -1365,6 +1397,7 @@ const server = http.createServer(async (req, res) => {
 
     if (url.pathname === '/sitemap.xml') {
       const paths = ['/', '/catalog', '/catalog/ru', '/catalog/us', '/catalog/crypto'];
+      if (dividendCrawler.status().stored) paths.push('/dividends');
       for (const a of universeItems()) paths.push(tickerPath(a));
       for (const rec of Object.values(cache)) {
         const p = tickerPath(rec.asset);
@@ -1383,9 +1416,17 @@ const server = http.createServer(async (req, res) => {
       // Дата у каждого адреса своя: поисковик должен видеть, что обновилась одна бумага,
       // а не весь сайт целиком. Вопросы и темы несут свою дату создания.
       const mod = new Map();
+      if (dividendCrawler.status().lastRunAt) mod.set('/dividends', dividendCrawler.status().lastRunAt);
       for (const rec of Object.values(cache)) {
         const p = tickerPath(rec.asset);
         if (rec.generatedAt) mod.set(p, rec.generatedAt);
+      }
+      // Дивиденды обновляются чаще сводок: страница меняется и тогда, когда новостей нет
+      const divAssets = assetByKey();
+      for (const [key, div] of Object.entries(dividendStore.all())) {
+        const a = divAssets.get(key);
+        const p = a ? tickerPath(a) : null;
+        if (p && div.at && (!mod.has(p) || String(div.at) > String(mod.get(p)))) mod.set(p, div.at);
       }
       for (const q of questionStore.all()) {
         if (q.asset && q.askedAt) mod.set(questionPath(q.asset, q), q.askedAt);
@@ -1551,6 +1592,24 @@ ${[...new Set(paths)]
       return sendHtml(res, catalogPage({ groups, siteUrl: SITE_URL, siteName: SITE_NAME, market }));
     }
 
+    // ------------------------------------------------------------ дивиденды
+    // Сводная страница не привязана к дате сбора: крон обновляет данные раз в сутки,
+    // а сама страница читается из готового файла.
+    if (url.pathname === '/dividends' || url.pathname === '/dividends/') {
+      const assets = assetByKey();
+      const items = Object.entries(dividendStore.all())
+        .map(([key, div]) => ({ asset: assets.get(key), div }))
+        .filter((x) => x.asset);
+      // Пустая таблица — не страница: пока крон не собрал данные, отдаём 404,
+      // чтобы поисковик не запомнил пустой календарь
+      if (!items.length) {
+        return sendHtml(res, notFoundPage({ siteUrl: SITE_URL, siteName: SITE_NAME }), { status: 404, cache: 'no-store' });
+      }
+      return sendHtml(res, dividendsPage({ items, siteUrl: SITE_URL, siteName: SITE_NAME }), {
+        cache: 'public, max-age=3600',
+      });
+    }
+
     // ------------------------------------------------------------ вопрос по тикеру
     // POST /ticker/us/AAPL/ask: ответ собирается один раз и сохраняется как публичная страница
     if (url.pathname.startsWith('/ticker/') && url.pathname.endsWith('/ask')) {
@@ -1683,6 +1742,7 @@ ${[...new Set(paths)]
               tickerPage({
                 asset,
                 rec: cache[key] ? { ...cache[key], ...meta(cache[key], true) } : null,
+                div: dividendFor(asset),
                 siteUrl: SITE_URL,
                 siteName: SITE_NAME,
                 related: relatedAssets(asset),
@@ -1820,6 +1880,7 @@ ${[...new Set(paths)]
       const html = tickerPage({
         asset,
         rec: rec ? { ...rec, ...meta(rec, true) } : null,
+        div: dividendFor(asset),
         siteUrl: SITE_URL,
         siteName: SITE_NAME,
         related: relatedAssets(asset),
@@ -1866,4 +1927,5 @@ server.listen(PORT, HOST, () => {
   if (droppedEntries) log(`из кеша выброшено битых записей: ${droppedEntries}`);
   if (CRAWLER.enabled) crawler.start();
   else log('крон выключен (CRAWLER_ENABLED=0)');
+  dividendCrawler.start();
 });

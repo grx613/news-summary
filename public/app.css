@@ -216,3 +216,36 @@ details.cat > summary:hover h2 { color: var(--accent); }
 .btn.ghost:hover { border-color: var(--accent); }
 .linkish { background: none; border: 0; padding: 0; font: inherit; color: var(--muted); cursor: pointer; text-decoration: underline; }
 .linkish:hover { color: var(--text); }
+
+/* Дивиденды: цифры — главное на блоке, поэтому сумма выплаты крупнее прочего текста */
+.div-card h2 { display: flex; align-items: baseline; gap: 10px; font-size: 19px; margin: 0 0 4px; }
+.div-card h2 span { color: var(--muted); font-weight: 500; font-size: 15px; }
+.div-next { display: flex; align-items: baseline; gap: 18px; flex-wrap: wrap; margin: 14px 0 4px; }
+.div-amount { font-size: 30px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--green); }
+.div-when { display: flex; flex-direction: column; font-size: 13px; color: var(--muted); }
+.div-when b { color: var(--text); font-size: 15px; font-weight: 600; }
+.div-yield { font-size: 13px; color: var(--muted); border-left: 1px solid var(--border); padding-left: 18px; }
+.div-facts { grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); margin: 14px 0 6px; }
+.div-table { width: 100%; border-collapse: collapse; font-size: 14px; margin-top: 6px; }
+.div-table th {
+  text-align: left; color: var(--muted); font-weight: 500; font-size: 12.5px;
+  border-bottom: 1px solid var(--border); padding: 7px 10px 7px 0;
+}
+.div-table td { padding: 7px 10px 7px 0; border-bottom: 1px solid rgba(48,54,61,.55); }
+.div-table .num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.div-table th.num { text-align: right; padding-right: 14px; }
+.div-table td.num { text-align: right; padding-right: 14px; }
+.div-kind { font-size: 11.5px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); white-space: nowrap; }
+.div-kind.rec { color: var(--green); border-color: rgba(63,185,80,.45); }
+.div-kind.fc { color: var(--yellow); border-color: rgba(210,153,34,.45); }
+.div-src { color: var(--muted); font-size: 12px; margin: 14px 0 0; }
+
+/* Календарь дивидендов: тикер рядом с названием — как в поиске, узнаваемо */
+.div-table .sym { color: var(--muted); font-size: 12.5px; margin-left: 4px; }
+@media (max-width: 640px) {
+  .div-table { font-size: 13px; }
+  /* На узком экране убираем последнюю колонку: статус и «изм. к году» —
+     пояснения, а дата и сумма должны остаться целиком */
+  .div-table th:last-child, .div-table td:last-child { display: none; }
+  .div-amount { font-size: 25px; }
+}
