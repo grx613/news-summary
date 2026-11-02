@@ -149,7 +149,6 @@ details.cat > summary:hover h2 { color: var(--accent); }
 .post-host::before { content: '('; }
 .post-host::after { content: ')'; }
 .post-date { font-variant-numeric: tabular-nums; }
-.post-cnt { margin-left: auto; color: var(--muted); }
 .post-reply { margin-left: auto; }
 
 .meta-nick { margin-left: auto; font-size: 13px; color: var(--muted); }
@@ -159,7 +158,6 @@ details.cat > summary:hover h2 { color: var(--accent); }
 /* тема в списке — та же сетка, что у вопросов аналитику */
 .post-item .qa-q { line-height: 1.4; }
 .post-item .post-meta { margin-top: 8px; }
-.post-item .post-cnt { margin-left: auto; }
 
 .post-list { margin-top: 4px; }
 .post { padding: 14px 0; border-top: 1px solid var(--border); }
@@ -311,3 +309,8 @@ details.cat > summary:hover h2 { color: var(--accent); }
   .totop { right: 12px; bottom: 12px; padding: 10px 13px; font-size: 15px; }
   .totop span { display: none; }
 }
+
+/* Счётчик рядом с заголовком в списках — как на старых досках: по нему видно,
+   насколько длинный ответ или сколько ответов в ветке, не открывая её */
+.qa-cnt { color: var(--muted); font-weight: 400; font-variant-numeric: tabular-nums; font-size: 13px; }
+.qa-item:hover .qa-cnt { color: var(--muted); }
