@@ -1380,18 +1380,27 @@ const server = http.createServer(async (req, res) => {
         paths.push('/forum/rules');
         for (const t of forumStore.threads()) paths.push(threadPath(t));
       }
-      // Только собранные записи несут уникальный контент — их и указываем с датой
-      const lastmod = Object.values(cache)
-        .map((r) => r.generatedAt)
-        .sort()
-        .pop();
+      // Дата у каждого адреса своя: поисковик должен видеть, что обновилась одна бумага,
+      // а не весь сайт целиком. Вопросы и темы несут свою дату создания.
+      const mod = new Map();
+      for (const rec of Object.values(cache)) {
+        const p = tickerPath(rec.asset);
+        if (rec.generatedAt) mod.set(p, rec.generatedAt);
+      }
+      for (const q of questionStore.all()) {
+        if (q.asset && q.askedAt) mod.set(questionPath(q.asset, q), q.askedAt);
+      }
+      if (FORUM_ENABLED) {
+        for (const t of forumStore.threads()) if (t.createdAt) mod.set(threadPath(t), t.createdAt);
+      }
+      const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
       const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-${paths
-  .map(
-    (p) =>
-      `  <url><loc>${SITE_URL}${p}</loc>${lastmod && p.startsWith('/ticker/') ? `<lastmod>${lastmod}</lastmod>` : ''}</url>`
-  )
+${[...new Set(paths)]
+  .map((p) => {
+    const d = mod.get(p);
+    return `  <url><loc>${esc(SITE_URL + p)}</loc>${d ? `<lastmod>${esc(String(d).slice(0, 10))}</lastmod>` : ''}</url>`;
+  })
   .join('\n')}
 </urlset>`;
       res.writeHead(200, { 'Content-Type': 'application/xml; charset=utf-8', 'Cache-Control': 'public, max-age=3600' });

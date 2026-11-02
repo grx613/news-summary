@@ -8,6 +8,11 @@ a { color: var(--accent); }
 .wrap { max-width: 980px; margin: 0 auto; padding: 40px 20px 80px; }
 h1 { margin: 0 0 6px; font-size: 27px; }
 h1 a { color: var(--text); text-decoration: none; }
+/* Логотип отделён от h1: h1 на каждой странице свой и содержит её тему */
+.logo { margin: 0 0 10px; font-size: 15px; font-weight: 600; letter-spacing: .2px; }
+.logo a { color: var(--muted); text-decoration: none; }
+.logo a:hover { color: var(--text); }
+.qa-h1, .post-h1 { font-size: 24px; line-height: 1.32; margin: 0 0 6px; max-width: 46em; }
 .sub { color: var(--muted); margin: 0 0 26px; font-size: 15px; }
 .sub b { color: var(--text); font-weight: 600; }
 
@@ -55,7 +60,7 @@ li { margin: 6px 0; }
 .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
 .cols ul li::marker { color: var(--red); }
 .cols .cats li::marker { color: var(--green); }
-@media (max-width: 640px) { .cols { grid-template-columns: 1fr; } }
+@media (max-width: 640px) { .cols { grid-template-columns: 1fr; } h1 { font-size: 22px; } .qa-h1, .post-h1 { font-size: 20px; } }
 
 .community { background: var(--card2); border-left: 2px solid var(--purple); border-radius: 0 8px 8px 0; padding: 10px 14px; margin-top: 8px; font-size: 14.5px; }
 .warn { margin-top: 18px; font-size: 12.5px; color: var(--muted); }
@@ -108,6 +113,7 @@ details.cat > summary:hover h2 { color: var(--accent); }
 /* вопросы к ИИ-аналитику */
 .qa { margin-top: 34px; background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 22px; }
 .qa h2 { font-size: 19px; margin: 0 0 4px; }
+.qa h2 span { color: var(--muted); font-weight: 500; font-size: 15px; }
 .qa .lead { color: var(--muted); font-size: 13.5px; margin: 0 0 16px; }
 .qa-form textarea { width: 100%; padding: 12px 14px; font: inherit; font-size: 15px; line-height: 1.5; color: var(--text); background: var(--card2); border: 1px solid var(--border); border-radius: 10px; outline: none; resize: vertical; min-height: 78px; }
 .qa-form textarea:focus { border-color: var(--accent); }
