@@ -290,3 +290,24 @@ details.cat > summary:hover h2 { color: var(--accent); }
 .jump a:hover { border-color: var(--accent); color: var(--accent); }
 /* Якорь не должен уезжать под верх экрана: отступ сверху даёт воздух */
 .card[id], .qa[id], .cat[id] { scroll-margin-top: 16px; }
+
+/* Плавный переход по якорям: иначе прыжок к дивидендам выглядит как перезагрузка */
+@media (prefers-reduced-motion: no-preference) {
+  html { scroll-behavior: smooth; }
+}
+
+/* Возврат наверх: после прыжка к дивидендам или к обсуждению до меню
+   приходится крутить страницу обратно. Ссылка-якорь, без скрипта —
+   так она работает и при отключённом JS, и в индексе не мешает */
+.totop {
+  position: fixed; right: 18px; bottom: 18px; z-index: 20;
+  padding: 9px 14px; border-radius: 999px; font-size: 13.5px; text-decoration: none;
+  color: var(--text); background: var(--card2); border: 1px solid var(--border);
+  box-shadow: 0 4px 14px rgba(0,0,0,.35);
+}
+.totop:hover { border-color: var(--accent); color: var(--accent); }
+@media (max-width: 640px) {
+  /* На телефоне кнопка не должна закрывать текст — остаётся один знак */
+  .totop { right: 12px; bottom: 12px; padding: 10px 13px; font-size: 15px; }
+  .totop span { display: none; }
+}
