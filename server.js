@@ -1857,7 +1857,18 @@ ${[...new Set(paths)]
           if (bad) {
             return sendHtml(
               res,
-              threadPage({ siteUrl: SITE_URL, asset, thread, replies: forumStore.replies(thread.id), me: user.me, account: user.account, error: bad }),
+              // Адресата передаём обратно: иначе форма после ошибки
+              // прикрепит ответ к теме, а не к тому сообщению, где её открыли
+              threadPage({
+                siteUrl: SITE_URL,
+                asset,
+                thread,
+                replies: forumStore.replies(thread.id),
+                me: user.me,
+                account: user.account,
+                to: Number(form.get('parent')) || 0,
+                error: bad,
+              }),
               { cache: 'no-store' }
             );
           }
