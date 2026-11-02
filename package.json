@@ -1,0 +1,13 @@
+{
+  "name": "news-summary",
+  "version": "1.0.0",
+  "description": "AI-саммари новостей по тикерам акций и криптовалют",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
