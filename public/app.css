@@ -105,7 +105,7 @@ details.cat > summary:hover h2 { color: var(--accent); }
 .tl .s { font-weight: 700; font-variant-numeric: tabular-nums; min-width: 62px; color: var(--accent); }
 .tl .n { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tl:hover .n { color: var(--text); }
-.nav { margin-top: 30px; font-size: 14px; }
+.nav { margin: 0 0 22px; font-size: 14px; }
 .nav a { margin-right: 16px; }
 .foot { margin-top: 50px; padding-top: 18px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12.5px; }
 .foot a { color: var(--muted); }
@@ -279,3 +279,14 @@ details.cat > summary:hover h2 { color: var(--accent); }
 .idx-cell-chg.up { color: var(--green); }
 .idx-cell-chg.down { color: var(--red); }
 .idx-home h2 .cnt { font-size: 13px; color: var(--muted); font-weight: 400; }
+
+/* Быстрые ссылки по странице тикера: страница длинная, без них нужна прокрутка.
+   Верхнее меню (.nav) ведёт по сайту, это — внутри самой страницы */
+.jump { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 0; }
+.jump a {
+  padding: 5px 13px; border-radius: 999px; font-size: 13px; text-decoration: none;
+  color: var(--text); background: var(--card); border: 1px solid var(--border);
+}
+.jump a:hover { border-color: var(--accent); color: var(--accent); }
+/* Якорь не должен уезжать под верх экрана: отступ сверху даёт воздух */
+.card[id], .qa[id], .cat[id] { scroll-margin-top: 16px; }
