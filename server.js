@@ -9,6 +9,9 @@ import { createDividendStore } from './lib/dividends.js';
 import { createDividendCrawler } from './lib/dividend-crawler.js';
 import { INDEXES, bySlug, createIndexStore } from './lib/indices.js';
 import { createIndexCrawler } from './lib/index-crawler.js';
+import { createChartStore } from './lib/charts.js';
+import { createChartCrawler } from './lib/chart-crawler.js';
+import { chartBlock, isPeriod } from './lib/chart-render.js';
 import { indexPage, indicesPage, homeIndices } from './lib/index-render.js';
 import {
   SITE_NAME,
@@ -112,6 +115,7 @@ const UNIVERSE_FILE = path.join(DATA_DIR, 'universe.json');
 const QUESTIONS_FILE = path.join(DATA_DIR, 'questions.json');
 const DIVIDENDS_FILE = path.join(DATA_DIR, 'dividends.json');
 const INDICES_FILE = path.join(DATA_DIR, 'indices.json');
+const CHARTS_FILE = path.join(DATA_DIR, 'charts.json');
 const FORUM_FILE = path.join(DATA_DIR, 'forum.json');
 const FORUM_SECRET_FILE = path.join(DATA_DIR, 'forum-secret.key');
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -1123,6 +1127,17 @@ const indexCrawler = createIndexCrawler({
   log,
 });
 
+// Графики — тоже справочные данные без модели: год дневных закрытий по каждой
+// бумаге. Свой файл и свой крон по той же причине, что у дивидендов.
+const chartStore = createChartStore(CHARTS_FILE, { log });
+const chartCrawler = createChartCrawler({
+  store: chartStore,
+  listUniverse: async () => currentUniverse() || (await getUniverse(CRAWLER, log)),
+  enabled: CRAWLER.enabled && process.env.CHARTS_ENABLED !== '0',
+  intervalMs: (Number(process.env.CHARTS_INTERVAL_HOURS) || 24) * 3600_000,
+  log,
+});
+
 const crawler = createCrawler({
   cfg: CRAWLER,
   log,
@@ -1160,6 +1175,20 @@ function universeItems() {
 // Дивиденды ключуются как кеш: MARKET:SYMBOL. Отдаём только то, что уже собрано —
 // страница не должна ждать сеть, а крон догонит на первом проходе
 const dividendFor = (asset) => dividendStore.get(`${asset.market}:${asset.symbol}`);
+
+// График ключуется так же. Период приходит из ?period=, но канонической остаётся
+// страница без параметра: иначе поисковик увидит четыре копии одной страницы
+function chartHtmlFor(asset, periodParam = '') {
+  const period = isPeriod(String(periodParam || '')) ? String(periodParam) : '1y';
+  return chartBlock({
+    asset,
+    rec: chartStore.get(`${asset.market}:${asset.symbol}`),
+    period,
+    // Ссылки периодов относительные: страница должна работать и на тестовой копии
+    // с чужим портом, где абсолютный адрес увёл бы на прод
+    canonicalPath: tickerPath(asset),
+  });
+}
 
 // Ключ -> актив: нужен сводной странице и карте сайта, где дивиденды приходят
 // отдельным списком без ссылки на бумагу
@@ -1410,6 +1439,7 @@ const server = http.createServer(async (req, res) => {
         crawler: crawler.status(),
         dividends: dividendCrawler.status(),
         indices: indexCrawler.status(),
+        charts: chartCrawler.status(),
       });
     }
 
@@ -1816,6 +1846,7 @@ ${[...new Set(paths)]
                 related: relatedAssets(asset),
                 questions: questionStore.byTicker(key),
                 forumHtml: forumHtmlFor(asset, user, { error: msg, title, body }),
+                chartHtml: chartHtmlFor(asset),
               }),
               { status: 200, cache: 'no-store' }
             );
@@ -1974,6 +2005,7 @@ ${[...new Set(paths)]
           notice: (url.searchParams.get('ok') || '').slice(0, 140),
           error: (url.searchParams.get('err') || '').slice(0, 300),
         }),
+        chartHtml: chartHtmlFor(asset, url.searchParams.get('period')),
       });
       // Страницы со свежей сводкой кешируем ненадолго, без сводки — не кешируем вовсе,
       // иначе поисковик запомнит «нет данных» и не переиндексирует.
@@ -2004,7 +2036,22 @@ ${[...new Set(paths)]
       res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
       return res.end('Not found');
     }
-    res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' });
+    // Без ETag браузер держал старую копию app.css по собственной эвристике,
+    // и новый блок страницы приезжал без стилей. Отдаём метку по mtime+размеру
+    const st = fs.statSync(file);
+    const etag = `W/"${st.size.toString(16)}-${Math.floor(st.mtimeMs).toString(16)}"`;
+    const headers = {
+      'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
+      ETag: etag,
+      'Last-Modified': st.mtime.toUTCString(),
+      // Кеш короткий, а не «навсегда»: имена файлов не содержат хеша версии
+      'Cache-Control': 'public, max-age=600',
+    };
+    if (req.headers['if-none-match'] === etag) {
+      res.writeHead(304, headers);
+      return res.end();
+    }
+    res.writeHead(200, headers);
     fs.createReadStream(file).pipe(res);
   } catch (e) {
     if (e.status !== 404) console.error(e);
@@ -2019,4 +2066,5 @@ server.listen(PORT, HOST, () => {
   else log('крон выключен (CRAWLER_ENABLED=0)');
   dividendCrawler.start();
   indexCrawler.start();
+  chartCrawler.start();
 });
