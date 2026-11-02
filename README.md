@@ -12,14 +12,16 @@
 ## Запуск
 
 ```bash
+git clone https://github.com/grx613/news-summary.git
 cd news-summary
+cp .env.example .env    # и вписать BOTHUB_API_KEY
 node server.js
 # http://localhost:3000
 ```
 
 Node.js 18+ (нужен встроенный `fetch`). Зависимостей нет — только стандартная библиотека.
 
-Настройки в `.env`:
+`.env` и весь `data/` в репозиторий не попадают: там ключ BotHub, кеш саммари, вопросы и обсуждения. Полный список переменных с умолчаниями — в `.env.example`. Настройки в `.env`:
 
 | Переменная | По умолчанию | Что задаёт |
 |---|---|---|
