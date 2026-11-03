@@ -383,3 +383,43 @@ a.ftree-row:hover .ft-text { color: var(--accent); }
   .ftree-row[style] { margin-left: calc(var(--d, 0) * 11px); }
   .ft-by { white-space: normal; }
 }
+
+/* Таблица на главной: тикеры по капитализации, как на биржевых витринах.
+   Числа справа моноширинными цифрами — иначе столбцы прыгают при прокрутке */
+.rank { margin-top: 24px; }
+.rank .head { margin-bottom: 4px; }
+.rank .lead { color: var(--muted); font-size: 14px; margin: 0 0 12px; }
+.tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.tabs .tab {
+  padding: 6px 14px; border-radius: 999px; font-size: 13.5px; text-decoration: none;
+  color: var(--text); background: var(--card); border: 1px solid var(--border);
+}
+.tabs .tab span { color: var(--muted); font-size: 12px; margin-left: 2px; }
+.tabs .tab:hover { border-color: var(--accent); color: var(--accent); }
+.tabs .tab.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.tabs .tab.on span { color: rgba(255,255,255,.75); }
+.rank-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.rank-table th {
+  text-align: left; color: var(--muted); font-weight: 500; font-size: 12.5px;
+  border-bottom: 1px solid var(--border); padding: 8px 10px 8px 0;
+}
+.rank-table td { padding: 8px 10px 8px 0; border-bottom: 1px solid rgba(48,54,61,.55); }
+.rank-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; padding-right: 14px; }
+.rank-table th.num { padding-right: 14px; }
+.rank-table .rk { color: var(--muted); font-size: 12.5px; width: 34px; font-variant-numeric: tabular-nums; }
+.rank-table th.rk { padding-right: 0; }
+.rank-table .nm a { color: var(--text); text-decoration: none; }
+.rank-table tr:hover .nm a { color: var(--accent); }
+.rank-table .sym { color: var(--muted); font-size: 12.5px; margin-left: 4px; }
+.rank-table .mk { width: 76px; }
+.rank-table .up { color: var(--green); }
+.rank-table .down { color: var(--red); }
+.rank-table .flat { color: var(--muted); }
+.rank-src { color: var(--muted); font-size: 12px; margin: 14px 0 0; }
+@media (max-width: 640px) {
+  /* На телефоне капитализация важнее рынка: колонку с тегом убираем,
+     а цену и изменение оставляем — они и есть смысл таблицы */
+  .rank-table { font-size: 13px; }
+  .rank-table .mk, .rank-table th.mk { display: none; }
+  .rank-table .cap { padding-right: 0; }
+}

@@ -14,6 +14,7 @@ import { createChartCrawler } from './lib/chart-crawler.js';
 import { createChartSeries } from './lib/chart-intraday.js';
 import { chartBlock, tfList, DEFAULT_TF } from './lib/chart-render.js';
 import { indexPage, indicesPage, homeIndices } from './lib/index-render.js';
+import { homeRank, isTab, HOME_TABS } from './lib/home-rank.js';
 import {
   SITE_NAME,
   MARKET_LABEL,
@@ -1469,6 +1470,9 @@ const server = http.createServer(async (req, res) => {
 
     if (url.pathname === '/sitemap.xml') {
       const paths = ['/', '/catalog', '/catalog/ru', '/catalog/us', '/catalog/crypto'];
+      // Вкладки главной — не копии: у каждой свой заголовок, описание и канонический
+      // адрес, поэтому в карту они идут отдельно. «Все» — это сам корень
+      for (const t of HOME_TABS) if (t.key !== 'all') paths.push(`/?tab=${t.key}`);
       if (dividendCrawler.status().stored) paths.push('/dividends');
       // Индексы попадают в карту только со значениями: страница из одних прочерков
       // поисковику бесполезна, а после первого прохода крона значения есть всегда
@@ -2042,6 +2046,10 @@ ${[...new Set(paths)]
       const groups = marketGroups();
       const recent = cachedRecent(14);
       const refreshedAt = recent.length ? recent[0].generatedAt : null;
+      // Вкладка — обычный параметр, а не якорь: сервер отдаёт уже собранный
+      // список, поэтому страница работает и без скриптов. Неизвестное значение
+      // молча откатывается на «Все», как и неизвестный интервал свечи
+      const tab = isTab(url.searchParams.get('tab')) ? url.searchParams.get('tab') : 'all';
       return sendHtml(
         res,
         homePage({
@@ -2050,6 +2058,16 @@ ${[...new Set(paths)]
           groups,
           cached: recent,
           refreshedAt,
+          tab,
+          // На вкладке каталог показывает только её рынок — иначе три адреса
+          // главной несут одни и те же ссылки и выглядят как копии
+          tabMarkets: tab === 'all' ? null : HOME_TABS.find((t) => t.key === tab)?.markets || null,
+          rankHtml: homeRank({
+            groups,
+            charts: chartStore.all(),
+            usdRate: currentUniverse()?.usdRate ?? null,
+            tab,
+          }),
           indicesHtml: homeIndices({ quotes: indexStore.all(), siteUrl: SITE_URL }),
         })
       );
