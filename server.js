@@ -1,5 +1,6 @@
 import http from 'node:http';
 import fs from 'node:fs';
+import { gzipSync } from 'node:zlib';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { get, stripTags, norm, decodeEntities } from './lib/http.js';
@@ -12,6 +13,8 @@ import { createIndexCrawler } from './lib/index-crawler.js';
 import { createChartStore, TIMEFRAMES } from './lib/charts.js';
 import { createChartCrawler } from './lib/chart-crawler.js';
 import { createChartSeries } from './lib/chart-intraday.js';
+import { createMarketFeed, isCtf, isCat, DEFAULT_CTF, CTF, CATS } from './lib/markets.js';
+import { chartsPage, cardInnerHtml, pollFor } from './lib/market-render.js';
 import { chartBlock, tfList, DEFAULT_TF } from './lib/chart-render.js';
 import { indexPage, indicesPage, homeIndices } from './lib/index-render.js';
 import { homeRank, isTab, HOME_TABS } from './lib/home-rank.js';
@@ -28,6 +31,7 @@ import {
   questionPage,
   dividendsPage,
   notFoundPage,
+  page,
 } from './lib/render.js';
 import {
   QA_SCHEMA,
@@ -1143,6 +1147,11 @@ const chartCrawler = createChartCrawler({
 // они устаревают раньше, чем закончится запись
 const chartSeries = createChartSeries({ store: chartStore, log });
 
+// Страница «Графики»: индексы, облигации, энергия, металлы и валюты.
+// Своего файла у неё нет — все ряды справочные и запрашиваются по требованию,
+// поэтому кеш живёт в памяти и отдельного крона не требует
+const marketFeed = createMarketFeed({ log });
+
 const crawler = createCrawler({
   cfg: CRAWLER,
   log,
@@ -1301,6 +1310,33 @@ const MIME = {
 function sendJson(res, status, body) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
   res.end(JSON.stringify(body));
+}
+
+// Отдача карточек обновления. Разметка свечей — это килобайты повторяющихся
+// координат, которые жмутся в десять раз: 470 КБ на вкладку индексов против 50
+// после gzip. Caddy здесь ничего не сжимает, а гонять полмегабайта каждые
+// полминуты на каждого посетителя нельзя, поэтому gzip делается на месте
+function sendJsonGzip(req, res, status, body) {
+  const raw = Buffer.from(JSON.stringify(body), 'utf8');
+  const accepts = String(req.headers['accept-encoding'] || '').includes('gzip');
+  if (!accepts) {
+    res.writeHead(status, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'Content-Length': raw.length,
+    });
+    res.end(raw);
+    return;
+  }
+  const packed = gzipSync(raw);
+  res.writeHead(status, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'Content-Encoding': 'gzip',
+    Vary: 'Accept-Encoding',
+    'Content-Length': packed.length,
+  });
+  res.end(packed);
 }
 
 function sendHtml(res, html, { status = 200, cache = 'public, max-age=300' } = {}) {
@@ -1474,6 +1510,10 @@ const server = http.createServer(async (req, res) => {
       // адрес, поэтому в карту они идут отдельно. «Все» — это сам корень
       for (const t of HOME_TABS) if (t.key !== 'all') paths.push(`/?tab=${t.key}`);
       if (dividendCrawler.status().stored) paths.push('/dividends');
+      // Страница графиков и её вкладки: у каждой свой заголовок, описание
+      // и самоссылающийся canonical, поэтому это не копии одной страницы
+      paths.push('/charts');
+      for (const c of CATS) if (c.key !== 'all') paths.push(`/charts?cat=${c.key}`);
       // Индексы попадают в карту только со значениями: страница из одних прочерков
       // поисковику бесполезна, а после первого прохода крона значения есть всегда
       if (indexCrawler.status().stored) {
@@ -1694,6 +1734,49 @@ ${[...new Set(paths)]
       return sendHtml(res, dividendsPage({ items, siteUrl: SITE_URL, siteName: SITE_NAME }), {
         cache: 'public, max-age=3600',
       });
+    }
+
+    // ------------------------------------------------------------ графики
+    // Страница с сеткой свечей по рынкам. Ряды справочные и запрашиваются
+    // по требованию, поэтому своего файла и крона у неё нет — только кеш в памяти
+    if (url.pathname === '/charts' || url.pathname === '/charts/') {
+      const catRaw = String(url.searchParams.get('cat') || 'all');
+      const cat = isCat(catRaw) ? catRaw : 'all';
+      const tfRaw = String(url.searchParams.get('tf') || DEFAULT_CTF);
+      // Неизвестный интервал откатывается на тот, что открывается по умолчанию:
+      // страница не должна отдавать 404 из-за параметра, набранного руками
+      const tf = isCtf(tfRaw) ? tfRaw : DEFAULT_CTF;
+      const { rows, quotes } = await marketFeed.board(cat, tf);
+      const out = chartsPage({ cat, tf, rows, quotes, siteName: SITE_NAME });
+      return sendHtml(
+        res,
+        page({
+          siteUrl: SITE_URL,
+          title: out.title,
+          description: out.description,
+          canonical: out.canonical,
+          body: out.body,
+          wide: true,
+        }),
+        // Дневные и крупнее меняются раз в сутки, минутные — постоянно:
+        // кешировать их одинаково значило бы показывать пятиминутную давность.
+        // Признак — сам интервал, а не «тот, что открывается по умолчанию»
+        { cache: CTF[tf]?.daily ? 'public, max-age=120' : 'no-store' }
+      );
+    }
+
+    // Обновление карточек: отдаём готовую разметку, а не данные, — так подпись,
+    // форматирование и разметка остаются в одном месте, на сервере
+    if (url.pathname === '/api/charts') {
+      const cat = isCat(String(url.searchParams.get('cat') || '')) ? String(url.searchParams.get('cat')) : 'all';
+      const tfRaw = String(url.searchParams.get('tf') || DEFAULT_CTF);
+      const tf = isCtf(tfRaw) ? tfRaw : DEFAULT_CTF;
+      const { rows, quotes } = await marketFeed.board(cat, tf);
+      const cards = rows.map((r) => ({
+        key: r.inst.key,
+        html: cardInnerHtml({ inst: r.inst, series: r.series, quote: quotes[r.inst.key], tf }),
+      }));
+      return sendJsonGzip(req, res, 200, { at: new Date().toISOString(), poll: pollFor(tf), cards });
     }
 
     // ------------------------------------------------------------ индексы

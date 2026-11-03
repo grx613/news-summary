@@ -221,6 +221,56 @@
     paint();
   }
 
+
+  // -------------------------------------------------- живые графики
+  // Сетка карточек обновляется сама: сервер отдаёт уже готовую разметку, поэтому
+  // форматирование и подписи остаются в одном месте, а на клиенте нет ни одной
+  // копии правил вывода. Дневные и крупнее не опрашиваются вовсе — data-poll
+  // у них не выставлен, свеча за день в течение дня не меняется.
+  const grid = document.querySelector('.ggrid[data-poll]');
+  if (grid) {
+    const cat = grid.dataset.cat || 'all';
+    const tf = grid.dataset.tf || '1d';
+    const every = Number(grid.dataset.poll) || 0;
+    let timer = null;
+    let busy = false;
+
+    const paint = (cards) => {
+      for (const c of cards || []) {
+        // Ищем по data-key, а не по порядку: если сервер вернул список короче,
+        // карточки не должны сдвинуться и показать чужую цену
+        const el = grid.querySelector(`.gcard[data-key="${c.key}"]`);
+        if (el) el.innerHTML = c.html;
+      }
+    };
+
+    const tick = async () => {
+      // Вкладка в фоне не должна тянуть трафик: браузер и так режет таймеры,
+      // но проверка избавляет от запроса сразу после возврата на вкладку
+      if (busy || document.hidden) return;
+      busy = true;
+      try {
+        const r = await fetch(`/api/charts?cat=${encodeURIComponent(cat)}&tf=${encodeURIComponent(tf)}`, {
+          headers: { Accept: 'application/json' },
+        });
+        if (r.ok) paint((await r.json()).cards);
+      } catch {
+        // Сеть отвалилась — на экране остаётся последний удачный кадр
+      } finally {
+        busy = false;
+      }
+    };
+
+    if (every > 0) {
+      timer = setInterval(tick, every);
+      // Возврат на вкладку — хороший момент обновить сразу, а не ждать период
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) tick();
+      });
+      window.addEventListener('pagehide', () => clearInterval(timer));
+    }
+  }
+
   // Кнопки отправки блокируем на время запроса, иначе двойной клик даёт два сообщения
   document.querySelectorAll('.forum-form').forEach((f) => {
     f.addEventListener('submit', () => {

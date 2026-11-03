@@ -423,3 +423,53 @@ a.ftree-row:hover .ft-text { color: var(--accent); }
   .rank-table .mk, .rank-table th.mk { display: none; }
   .rank-table .cap { padding-right: 0; }
 }
+
+/* ---------------------------------------------- страница «Графики»
+   Сетка карточек вместо одного большого графика: задача страницы — увидеть
+   весь рынок разом, а не разглядывать одну бумагу. Ширина шире обычной колонки
+   (980 px), иначе в ряд помещаются две карточки и сравнение теряет смысл */
+.wide { max-width: 1280px; }
+.gtabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 6px; }
+.gtab {
+  padding: 8px 18px; border-radius: 999px; font-size: 14.5px; text-decoration: none;
+  color: var(--text); background: var(--card); border: 1px solid var(--border);
+}
+.gtab:hover { border-color: var(--accent); color: var(--accent); }
+.gtab.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.gperiods { margin: 10px 0 18px; }
+
+.ggrid {
+  display: grid; gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+}
+.gcard {
+  background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+  padding: 14px 14px 10px; display: flex; flex-direction: column; min-width: 0;
+}
+.ghead { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.gname { font-size: 14.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gname a { color: var(--text); text-decoration: none; }
+.gname a:hover { color: var(--accent); }
+.gsym { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.gvals { display: flex; align-items: baseline; gap: 10px; margin: 6px 0 2px; }
+.gprice { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.gchg { font-size: 13px; font-variant-numeric: tabular-nums; }
+.gchg.up { color: var(--green); }
+.gchg.down { color: var(--red); }
+/* Нулевое изменение серым, а не зелёным: цвет заявляет направление,
+   которого у нуля нет */
+.gchg.flat { color: var(--muted); }
+.gchart { margin-top: 6px; }
+.gchart svg { width: 100%; height: 120px; display: block; }
+.gempty { color: var(--muted); font-size: 13px; padding: 40px 0; text-align: center; }
+.gaxis { display: flex; justify-content: space-between; color: var(--muted); font-size: 11.5px; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.gfoot { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 11.5px; margin-top: 6px; min-height: 16px; }
+/* Точка «идёт обновление»: без неё подмена разметки выглядит как мигание */
+.ggrid[data-poll] .gtime::before {
+  content: ''; display: inline-block; width: 5px; height: 5px; border-radius: 50%;
+  background: var(--green); margin-right: 5px; vertical-align: middle;
+}
+@media (max-width: 640px) {
+  .ggrid { grid-template-columns: 1fr; }
+  .gchart svg { height: 140px; }
+}
