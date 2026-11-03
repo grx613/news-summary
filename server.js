@@ -77,7 +77,21 @@ const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || '127.0.0.1';
 const API_KEY = process.env.BOTHUB_API_KEY;
 const BASE_URL = process.env.BOTHUB_BASE_URL || 'https://openai.bothub.chat/v1';
-const MODEL = process.env.MODEL || 'claude-haiku-5.5';
+
+// Модели, которых у нас быть не должно ни при какой настройке. sonar-deep-research
+// стоит 345 ₽ за миллион входных токенов против 17 у haiku: один случайный вызов
+// 2 ноября обошёлся в 67,5 ₽ — четверть всего расхода проекта. Настройка модели
+// приходит строкой из .env, и опечатка в ней не должна стоить денег
+const EXPENSIVE_MODELS = new Set(['sonar-deep-research', 'sonar-reasoning-pro', 'sonar-reasoning']);
+function safeModel(want, fallback, what) {
+  if (want && EXPENSIVE_MODELS.has(want)) {
+    console.warn(`${what}=${want}: модель в списке дорогих, беру ${fallback}`);
+    return fallback;
+  }
+  return want || fallback;
+}
+
+const MODEL = safeModel(process.env.MODEL, 'claude-haiku-5.5', 'MODEL');
 
 const CACHE_TTL_MS = (Number(process.env.CACHE_TTL_HOURS) || 24) * 3600_000;
 const NEWS_WINDOW_H = Number(process.env.NEWS_WINDOW_HOURS) || 72;
@@ -100,8 +114,14 @@ const FORUM_ENABLED = process.env.FORUM_ENABLED !== '0';
 const MODERATOR_TOKEN = (process.env.FORUM_MODERATOR_TOKEN || '').trim();
 
 // Поисковая модель для ответов на вопросы. Perplexity sonar ходит в интернет сам и возвращает
-// цитаты отдельным полем. QA_SEARCH_MODEL=off отключает поиск и оставляет ответ по кешу новостей
-const QA_SEARCH_MODEL = (process.env.QA_SEARCH_MODEL || 'sonar-pro').trim();
+// цитаты отдельным полем. QA_SEARCH_MODEL=off отключает поиск и оставляет ответ по кешу новостей.
+// Имя модели проверяется тем же списком дорогих, что и MODEL: строка в .env — это просто
+// текст, и опечатка в ней молча включала бы модель в тысячу раз дороже обычной
+const QA_SEARCH_DEFAULT = 'sonar-pro';
+const QA_SEARCH_MODEL =
+  process.env.QA_SEARCH_MODEL === 'off'
+    ? 'off'
+    : safeModel((process.env.QA_SEARCH_MODEL || QA_SEARCH_DEFAULT).trim(), QA_SEARCH_DEFAULT, 'QA_SEARCH_MODEL');
 const QA_SEARCH_ON = QA_SEARCH_MODEL && QA_SEARCH_MODEL !== 'off';
 const QA_SEARCH_RECENCY = (process.env.QA_SEARCH_RECENCY || 'month').trim();
 // Второй проход по кешу, если интернет недоступен: ответ по публикациям лучше, чем ошибка
@@ -659,6 +679,13 @@ async function callModel(
     timeoutMs = 120_000,
   } = {}
 ) {
+  // Последняя сетка: дорогая модель не должна уйти в запрос, даже если её имя придёт
+  // не из .env, а из новой настройки или будущей правки кода. sonar-pro остаётся
+  // поисковой, поэтому ответ не теряет цитаты
+  if (EXPENSIVE_MODELS.has(model)) {
+    console.warn(`модель ${model} в списке дорогих, вместо неё ${QA_SEARCH_DEFAULT}`);
+    model = QA_SEARCH_DEFAULT;
+  }
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   const body = {
