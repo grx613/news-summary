@@ -12,7 +12,7 @@ import { createIndexCrawler } from './lib/index-crawler.js';
 import { createChartStore, TIMEFRAMES } from './lib/charts.js';
 import { createChartCrawler } from './lib/chart-crawler.js';
 import { createChartSeries } from './lib/chart-intraday.js';
-import { chartBlock, isPeriod, tfList, DEFAULT_TF } from './lib/chart-render.js';
+import { chartBlock, tfList, DEFAULT_TF } from './lib/chart-render.js';
 import { indexPage, indicesPage, homeIndices } from './lib/index-render.js';
 import {
   SITE_NAME,
@@ -1180,15 +1180,14 @@ function universeItems() {
 // страница не должна ждать сеть, а крон догонит на первом проходе
 const dividendFor = (asset) => dividendStore.get(`${asset.market}:${asset.symbol}`);
 
-// График ключуется так же. Интервал приходит из ?tf=, окно — из ?period=, но
-// канонической остаётся страница без параметров: иначе поисковик увидит
-// десятки копий одной страницы, отличающихся только графиком.
+// График ключуется так же. Интервал приходит из ?tf=, и он же задаёт окно:
+// отдельного ?period= больше нет — человек выбирает свечу, а не два параметра,
+// которые друг друга перебивают. Канонической остаётся страница без параметров,
+// иначе поисковик увидит десятки копий, отличающихся только графиком.
 // Внутридневной ряд берётся по сети, поэтому функция асинхронная; день, неделя
 // и месяц собираются из файла и сети не требуют вовсе
-async function chartHtmlFor(asset, { tf: tfParam = '', period: periodParam = '' } = {}) {
-  const market = asset.market;
-  const tf = tfList(market).includes(String(tfParam || '')) ? String(tfParam) : DEFAULT_TF;
-  const period = isPeriod(String(periodParam || '')) ? String(periodParam) : '1y';
+async function chartHtmlFor(asset, { tf: tfParam = '' } = {}) {
+  const tf = tfList(asset.market).includes(String(tfParam || '')) ? String(tfParam) : DEFAULT_TF;
   const rec = chartStore.get(`${asset.market}:${asset.symbol}`);
   try {
     const series = await chartSeries.get(asset, rec, tf);
@@ -1197,7 +1196,6 @@ async function chartHtmlFor(asset, { tf: tfParam = '', period: periodParam = '' 
       rec,
       series,
       tf,
-      period,
       // Ссылки относительные: страница должна работать и на тестовой копии
       // с чужим портом, где абсолютный адрес увёл бы на прод
       canonicalPath: tickerPath(asset),
@@ -2012,7 +2010,7 @@ ${[...new Set(paths)]
       const rec = cache[key];
       const user = currentUser(req);
       const tfParam = String(url.searchParams.get('tf') || '');
-      const chartHtml = await chartHtmlFor(asset, { tf: tfParam, period: url.searchParams.get('period') || '' });
+      const chartHtml = await chartHtmlFor(asset, { tf: tfParam });
       const html = tickerPage({
         asset,
         rec: rec ? { ...rec, ...meta(rec, true) } : null,
