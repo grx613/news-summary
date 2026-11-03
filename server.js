@@ -866,10 +866,16 @@ async function getSummary(a, { force = false } = {}) {
 // даже если крон успел записать его в «тонкие»
 function reviveThin(a) {
   const key = cacheKey(a);
+  let changed = false;
   if (typeof crawlerState?.thin === 'object' && crawlerState.thin[key]) {
     delete crawlerState.thin[key];
-    saveCrawlerState();
+    changed = true;
   }
+  if (crawlerState?.thinAt && crawlerState.thinAt[key]) {
+    delete crawlerState.thinAt[key];
+    changed = true;
+  }
+  if (changed) saveCrawlerState();
 }
 
 // ---------------------------------------------------------------- лимиты
@@ -1121,9 +1127,12 @@ const CRAWLER_STATE_FILE = path.join(DATA_DIR, 'crawler-state.json');
 function loadCrawlerState() {
   try {
     const s = JSON.parse(fs.readFileSync(CRAWLER_STATE_FILE, 'utf8'));
-    return { thin: s?.thin && typeof s.thin === 'object' ? s.thin : {} };
+    const obj = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
+    // backoff тоже переживает перезапуск: иначе после рестарта крон сразу бьёт
+    // по тем же тикерам и второй раз засчитывает страйк за те же сутки
+    return { thin: obj(s?.thin), thinAt: obj(s?.thinAt), backoff: obj(s?.backoff) };
   } catch {
-    return { thin: {} };
+    return { thin: {}, thinAt: {}, backoff: {} };
   }
 }
 
@@ -1219,6 +1228,9 @@ const crawler = createCrawler({
   cache,
   cacheKey,
   isFresh,
+  // TTL передаётся, чтобы крон считал срок от него: при TTL 26 ч и интервале 24 ч
+  // сводка должна обновляться до истечения, а не «за 90% интервала»
+  ttlMs: CACHE_TTL_MS,
   refresh: (asset) => getSummary(asset, { force: true }),
   state: crawlerState,
   onDone: saveCrawlerState,
@@ -1228,7 +1240,21 @@ const crawler = createCrawler({
       fs.mkdirSync(DATA_DIR, { recursive: true });
       fs.writeFile(UNIVERSE_FILE, JSON.stringify(u, null, 2), () => {});
     } catch {}
-    return u;
+    // Страницы тикеров живут и после того, как бумага выпала из дневного списка:
+    // префы вроде SBERP схлопываются с обыкновенными, но у них своя страница в каталоге
+    // и в sitemap. Без этого их сводка не обновляется никогда — тот же довод, что
+    // у крона графиков. Четыре лишних генерации в сутки стоят меньше рубля
+    const items = [...(u?.items || [])];
+    const known = new Set(items.map((a) => cacheKey(a)));
+    for (const rec of Object.values(cache)) {
+      const a = rec?.asset;
+      if (!a?.symbol || !a.market) continue;
+      const k = cacheKey(a);
+      if (known.has(k)) continue;
+      known.add(k);
+      items.push(a);
+    }
+    return { ...u, items };
   },
 });
 
