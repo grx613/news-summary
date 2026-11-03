@@ -469,7 +469,7 @@ a.gcard:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
    которого у нуля нет */
 .gchg.flat { color: var(--muted); }
 .gchart { margin-top: 6px; }
-.gchart svg { width: 100%; height: 120px; display: block; }
+.gchart svg { width: 100%; height: 150px; display: block; }
 .gempty { color: var(--muted); font-size: 13px; padding: 40px 0; text-align: center; }
 .gaxis { display: flex; justify-content: space-between; color: var(--muted); font-size: 11.5px; margin-top: 2px; font-variant-numeric: tabular-nums; }
 .gfoot { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 11.5px; margin-top: 6px; min-height: 16px; }
@@ -480,7 +480,7 @@ a.gcard:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 }
 @media (max-width: 640px) {
   .ggrid { grid-template-columns: 1fr; }
-  .gchart svg { height: 140px; }
+  .gchart svg { height: 165px; }
 }
 
 /* Хлебные крошки на странице инструмента: видно, из какой вкладки пришёл
