@@ -442,14 +442,19 @@ a.ftree-row:hover .ft-text { color: var(--accent); }
   display: grid; gap: 14px;
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
 }
+/* Карточка — ссылка целиком: нажатие на любую её точку открывает страницу
+   инструмента, как в списках котировок. Подчёркивания нет: оно превратило бы
+   сетку в набор ссылок вместо таблицы цен */
+a.gcard { text-decoration: none; color: inherit; transition: border-color .12s; }
+a.gcard:hover { border-color: var(--accent); }
+a.gcard:hover .gname { color: var(--accent); }
+a.gcard:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .gcard {
   background: var(--card); border: 1px solid var(--border); border-radius: 12px;
   padding: 14px 14px 10px; display: flex; flex-direction: column; min-width: 0;
 }
 .ghead { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .gname { font-size: 14.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.gname a { color: var(--text); text-decoration: none; }
-.gname a:hover { color: var(--accent); }
 .gsym { color: var(--muted); font-size: 12px; white-space: nowrap; }
 .gvals { display: flex; align-items: baseline; gap: 10px; margin: 6px 0 2px; }
 .gprice { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -473,3 +478,9 @@ a.ftree-row:hover .ft-text { color: var(--accent); }
   .ggrid { grid-template-columns: 1fr; }
   .gchart svg { height: 140px; }
 }
+
+/* Хлебные крошки на странице инструмента: видно, из какой вкладки пришёл
+   человек, и можно вернуться на шаг назад, не открывая меню */
+.crumbs { color: var(--muted); font-size: 13px; margin: 14px 0 2px; }
+.crumbs a { color: var(--muted); text-decoration: none; }
+.crumbs a:hover { color: var(--accent); }

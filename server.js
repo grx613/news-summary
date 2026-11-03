@@ -13,8 +13,8 @@ import { createIndexCrawler } from './lib/index-crawler.js';
 import { createChartStore, TIMEFRAMES } from './lib/charts.js';
 import { createChartCrawler } from './lib/chart-crawler.js';
 import { createChartSeries } from './lib/chart-intraday.js';
-import { createMarketFeed, isCtf, isCat, DEFAULT_CTF, CTF, CATS } from './lib/markets.js';
-import { chartsPage, cardInnerHtml, pollFor } from './lib/market-render.js';
+import { createMarketFeed, isCtf, isCat, DEFAULT_CTF, CTF, CATS, INSTRUMENTS, instrumentBySlug, instrumentPath } from './lib/markets.js';
+import { chartsPage, instrumentPage, cardInnerHtml, pollFor } from './lib/market-render.js';
 import { chartBlock, tfList, DEFAULT_TF } from './lib/chart-render.js';
 import { indexPage, indicesPage, homeIndices } from './lib/index-render.js';
 import { homeRank, isTab, HOME_TABS } from './lib/home-rank.js';
@@ -1514,6 +1514,8 @@ const server = http.createServer(async (req, res) => {
       // и самоссылающийся canonical, поэтому это не копии одной страницы
       paths.push('/charts');
       for (const c of CATS) if (c.key !== 'all') paths.push(`/charts?cat=${c.key}`);
+      // Страница каждого инструмента: у всех свой заголовок и своё содержимое
+      for (const i of INSTRUMENTS) paths.push(instrumentPath(i));
       // Индексы попадают в карту только со значениями: страница из одних прочерков
       // поисковику бесполезна, а после первого прохода крона значения есть всегда
       if (indexCrawler.status().stored) {
@@ -1761,6 +1763,33 @@ ${[...new Set(paths)]
         // Дневные и крупнее меняются раз в сутки, минутные — постоянно:
         // кешировать их одинаково значило бы показывать пятиминутную давность.
         // Признак — сам интервал, а не «тот, что открывается по умолчанию»
+        { cache: CTF[tf]?.daily ? 'public, max-age=120' : 'no-store' }
+      );
+    }
+
+    // Подстраницы инструментов обязаны стоять до общего правила /charts:
+    // страница сетки смотрит только на точный путь и лишние сегменты не увидит,
+    // но порядок держим явным, как у форума на странице тикера
+    if (url.pathname.startsWith('/charts/')) {
+      const inst = instrumentBySlug(decodeURIComponent(url.pathname.split('/')[2] || ''));
+      if (!inst) {
+        return sendHtml(res, notFoundPage({ siteUrl: SITE_URL, siteName: SITE_NAME }), { status: 404, cache: 'no-store' });
+      }
+      const tfRaw = String(url.searchParams.get('tf') || DEFAULT_CTF);
+      const tf = isCtf(tfRaw) ? tfRaw : DEFAULT_CTF;
+      const { series, quote } = await marketFeed.one(inst, tf);
+      const out = instrumentPage({ inst, series, quote, tf, siteUrl: SITE_URL, siteName: SITE_NAME });
+      return sendHtml(
+        res,
+        page({
+          siteUrl: SITE_URL,
+          title: out.title,
+          description: out.description,
+          canonical: out.canonical,
+          body: out.body,
+          jsonLd: out.jsonLd,
+        }),
+        // Та же логика, что у сетки: минутный ряд живёт секунды, дневной — сутки
         { cache: CTF[tf]?.daily ? 'public, max-age=120' : 'no-store' }
       );
     }
