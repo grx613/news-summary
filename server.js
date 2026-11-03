@@ -67,6 +67,7 @@ import {
   forumNotFound,
   threadPath,
 } from './lib/forum-render.js';
+import { createSpendTracker } from './lib/spend.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 loadEnv(path.join(__dirname, '.env'));
@@ -124,6 +125,7 @@ const INDICES_FILE = path.join(DATA_DIR, 'indices.json');
 const CHARTS_FILE = path.join(DATA_DIR, 'charts.json');
 const FORUM_FILE = path.join(DATA_DIR, 'forum.json');
 const FORUM_SECRET_FILE = path.join(DATA_DIR, 'forum-secret.key');
+const SPEND_FILE = path.join(DATA_DIR, 'spend.json');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
 if (!API_KEY) {
@@ -1107,6 +1109,22 @@ function saveCrawlerState() {
 
 const crawlerState = loadCrawlerState();
 
+// Расход считает сам провайдер, а не наш счётчик в памяти: после перезапуска
+// счётчик обнулялся, а повторная генерация по тикеру затирала прежнюю запись в кеше
+// вместе с её расходом. Отчёт BotHub — единственный источник, который это переживает.
+// Свой крон: отчёт весит сотни килобайт, чаще раза в несколько часов его тянуть незачем
+const spendTracker = createSpendTracker({
+  apiKey: API_KEY,
+  dataFile: SPEND_FILE,
+  log,
+  // Ключ .env — это ключ проекта, его расход и считаем. Разработка идёт другим ключом
+  // и в этот итог не входит — иначе сайт показывал бы чужой счёт
+  from: process.env.SPEND_FROM || '2026-11-01',
+  intervalMs: (Number(process.env.SPEND_INTERVAL_HOURS) || 6) * 3600_000,
+  enabled: process.env.SPEND_ENABLED !== '0',
+  usdRate: () => currentUniverse()?.usdRate ?? null,
+});
+
 // Дивиденды живут своим файлом и своим кроном: новостной пишет cache.json и тратит
 // деньги на модель, а это справочные данные из бесплатных источников.
 const dividendStore = createDividendStore(DIVIDENDS_FILE, { log });
@@ -1502,7 +1520,10 @@ const server = http.createServer(async (req, res) => {
         ok: true,
         model: MODEL,
         cacheEntries: Object.keys(cache).length,
-        spend: { tokens: totalTokens, usd: Number(totalCostUsd.toFixed(4)) },
+        // Счётчик с последнего запуска оставлен для совместимости, но полный итог
+        // теперь берётся у провайдера — он не обнуляется перезапуском
+        spendSinceStart: { tokens: totalTokens, usd: Number(totalCostUsd.toFixed(4)) },
+        spend: spendTracker.status(),
         auth: Boolean(BASIC_AUTH),
         ipLimits: { generationsPerHour: MAX_GEN_PER_IP_HOUR, searchesPerMinute: MAX_SEARCH_PER_IP_MIN },
         generationsLastHour: genLog.length,
@@ -2289,4 +2310,5 @@ server.listen(PORT, HOST, () => {
   dividendCrawler.start();
   indexCrawler.start();
   chartCrawler.start();
+  spendTracker.start();
 });
