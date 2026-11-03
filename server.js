@@ -1138,7 +1138,23 @@ const indexCrawler = createIndexCrawler({
 const chartStore = createChartStore(CHARTS_FILE, { log });
 const chartCrawler = createChartCrawler({
   store: chartStore,
-  listUniverse: async () => currentUniverse() || (await getUniverse(CRAWLER, log)),
+  // Не только дневной список: страница тикера живёт и после того, как бумага
+  // выпала из списка, — она открывается из кеша. Без этого SBERP показывал
+  // «данных нет», хотя страница у него есть и сводка на месте
+  listUniverse: async () => {
+    const base = currentUniverse() || (await getUniverse(CRAWLER, log));
+    const items = [...(base?.items || [])];
+    const known = new Set(items.map((a) => `${a.market}:${a.symbol}`));
+    for (const rec of Object.values(cache)) {
+      const a = rec?.asset;
+      if (!a?.symbol || !a.market) continue;
+      const k = `${a.market}:${a.symbol}`;
+      if (known.has(k)) continue;
+      known.add(k);
+      items.push(a);
+    }
+    return { ...base, items };
+  },
   enabled: CRAWLER.enabled && process.env.CHARTS_ENABLED !== '0',
   intervalMs: (Number(process.env.CHARTS_INTERVAL_HOURS) || 24) * 3600_000,
   log,
