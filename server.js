@@ -9,9 +9,10 @@ import { createDividendStore } from './lib/dividends.js';
 import { createDividendCrawler } from './lib/dividend-crawler.js';
 import { INDEXES, bySlug, createIndexStore } from './lib/indices.js';
 import { createIndexCrawler } from './lib/index-crawler.js';
-import { createChartStore } from './lib/charts.js';
+import { createChartStore, TIMEFRAMES } from './lib/charts.js';
 import { createChartCrawler } from './lib/chart-crawler.js';
-import { chartBlock, isPeriod } from './lib/chart-render.js';
+import { createChartSeries } from './lib/chart-intraday.js';
+import { chartBlock, isPeriod, tfList, DEFAULT_TF } from './lib/chart-render.js';
 import { indexPage, indicesPage, homeIndices } from './lib/index-render.js';
 import {
   SITE_NAME,
@@ -1137,6 +1138,9 @@ const chartCrawler = createChartCrawler({
   intervalMs: (Number(process.env.CHARTS_INTERVAL_HOURS) || 24) * 3600_000,
   log,
 });
+// Внутридневные ряды живут в памяти с коротким сроком: в файл их не положить,
+// они устаревают раньше, чем закончится запись
+const chartSeries = createChartSeries({ store: chartStore, log });
 
 const crawler = createCrawler({
   cfg: CRAWLER,
@@ -1176,18 +1180,34 @@ function universeItems() {
 // страница не должна ждать сеть, а крон догонит на первом проходе
 const dividendFor = (asset) => dividendStore.get(`${asset.market}:${asset.symbol}`);
 
-// График ключуется так же. Период приходит из ?period=, но канонической остаётся
-// страница без параметра: иначе поисковик увидит четыре копии одной страницы
-function chartHtmlFor(asset, periodParam = '') {
+// График ключуется так же. Интервал приходит из ?tf=, окно — из ?period=, но
+// канонической остаётся страница без параметров: иначе поисковик увидит
+// десятки копий одной страницы, отличающихся только графиком.
+// Внутридневной ряд берётся по сети, поэтому функция асинхронная; день, неделя
+// и месяц собираются из файла и сети не требуют вовсе
+async function chartHtmlFor(asset, { tf: tfParam = '', period: periodParam = '' } = {}) {
+  const market = asset.market;
+  const tf = tfList(market).includes(String(tfParam || '')) ? String(tfParam) : DEFAULT_TF;
   const period = isPeriod(String(periodParam || '')) ? String(periodParam) : '1y';
-  return chartBlock({
-    asset,
-    rec: chartStore.get(`${asset.market}:${asset.symbol}`),
-    period,
-    // Ссылки периодов относительные: страница должна работать и на тестовой копии
-    // с чужим портом, где абсолютный адрес увёл бы на прод
-    canonicalPath: tickerPath(asset),
-  });
+  const rec = chartStore.get(`${asset.market}:${asset.symbol}`);
+  try {
+    const series = await chartSeries.get(asset, rec, tf);
+    return chartBlock({
+      asset,
+      rec,
+      series,
+      tf,
+      period,
+      // Ссылки относительные: страница должна работать и на тестовой копии
+      // с чужим портом, где абсолютный адрес увёл бы на прод
+      canonicalPath: tickerPath(asset),
+    });
+  } catch (e) {
+    // График — украшение, а не причина отдать 500 на всю страницу:
+    // сводка, обсуждение и дивиденды важнее свечей
+    log(`график ${asset.market}:${asset.symbol}: ${e.message}`);
+    return '';
+  }
 }
 
 // Ключ -> актив: нужен сводной странице и карте сайта, где дивиденды приходят
@@ -1834,7 +1854,7 @@ ${[...new Set(paths)]
           const body = String(form.get('body') || '');
           const bad = validateTitle(title) || validatePost(body);
           const key = cacheKey(asset);
-          const fail = (msg) =>
+          const fail = async (msg) =>
             sendHtml(
               res,
               tickerPage({
@@ -1846,7 +1866,7 @@ ${[...new Set(paths)]
                 related: relatedAssets(asset),
                 questions: questionStore.byTicker(key),
                 forumHtml: forumHtmlFor(asset, user, { error: msg, title, body }),
-                chartHtml: chartHtmlFor(asset),
+                chartHtml: await chartHtmlFor(asset),
               }),
               { status: 200, cache: 'no-store' }
             );
@@ -1991,6 +2011,8 @@ ${[...new Set(paths)]
       const key = cacheKey(asset);
       const rec = cache[key];
       const user = currentUser(req);
+      const tfParam = String(url.searchParams.get('tf') || '');
+      const chartHtml = await chartHtmlFor(asset, { tf: tfParam, period: url.searchParams.get('period') || '' });
       const html = tickerPage({
         asset,
         rec: rec ? { ...rec, ...meta(rec, true) } : null,
@@ -2005,12 +2027,17 @@ ${[...new Set(paths)]
           notice: (url.searchParams.get('ok') || '').slice(0, 140),
           error: (url.searchParams.get('err') || '').slice(0, 300),
         }),
-        chartHtml: chartHtmlFor(asset, url.searchParams.get('period')),
+        chartHtml,
       });
       // Страницы со свежей сводкой кешируем ненадолго, без сводки — не кешируем вовсе,
       // иначе поисковик запомнит «нет данных» и не переиндексирует.
-      // Страницу вошедшего не кешируем: в ней ник и формы, чужая копия из кеша их не должна показать
-      return sendHtml(res, html, { cache: user.me ? 'no-store' : rec ? 'public, max-age=300' : 'no-store' });
+      // Страницу вошедшего не кешируем: в ней ник и формы, чужая копия из кеша их не должна показать.
+      // Внутридневной график устаревает за минуты, поэтому такой странице срок короче
+      // дневного: иначе человек полчаса видел бы минутные свечи пятиминутной давности
+      const intraday = TIMEFRAMES[tfParam] && !TIMEFRAMES[tfParam].daily;
+      return sendHtml(res, html, {
+        cache: user.me || intraday ? 'no-store' : rec ? 'public, max-age=300' : 'no-store',
+      });
     }
 
     if (url.pathname === '/' || url.pathname === '/index.html') {
