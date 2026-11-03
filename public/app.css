@@ -107,6 +107,10 @@ details.cat > summary:hover h2 { color: var(--accent); }
 .tl:hover .n { color: var(--text); }
 .nav { margin: 0 0 22px; font-size: 14px; }
 .nav a { margin-right: 16px; }
+/* Текущий раздел не выглядит ссылкой, но и не исчезает: человек видит, где он */
+.nav a.on { color: var(--text); font-weight: 600; }
+/* Переключение интервала идёт запросом: без пометки блок кажется зависшим */
+[data-live].loading { opacity: .55; transition: opacity .12s; }
 .foot { margin-top: 50px; padding-top: 18px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12.5px; }
 .foot a { color: var(--muted); }
 

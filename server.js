@@ -14,7 +14,7 @@ import { createChartStore, TIMEFRAMES } from './lib/charts.js';
 import { createChartCrawler } from './lib/chart-crawler.js';
 import { createChartSeries } from './lib/chart-intraday.js';
 import { createMarketFeed, isCtf, isCat, DEFAULT_CTF, CTF, CATS, INSTRUMENTS, instrumentBySlug, instrumentPath } from './lib/markets.js';
-import { chartsPage, instrumentPage, cardInnerHtml, pollFor } from './lib/market-render.js';
+import { chartsPage, chartsBoard, chartsMeta, instrumentPage, instChartInner, cardInnerHtml, pollFor } from './lib/market-render.js';
 import { chartBlock, tfList, DEFAULT_TF } from './lib/chart-render.js';
 import { indexPage, indicesPage, homeIndices } from './lib/index-render.js';
 import { homeRank, isTab, HOME_TABS } from './lib/home-rank.js';
@@ -1792,6 +1792,55 @@ ${[...new Set(paths)]
         // Та же логика, что у сетки: минутный ряд живёт секунды, дневной — сутки
         { cache: CTF[tf]?.daily ? 'public, max-age=120' : 'no-store' }
       );
+    }
+
+    // Переключение интервала без перезагрузки: те же куски разметки, что и на
+    // странице, но отдельным ответом. Страница без скрипта работает как раньше —
+    // это дополнение к ссылкам, а не замена им
+    if (url.pathname === '/api/board') {
+      const catRaw = String(url.searchParams.get('cat') || 'all');
+      const cat = isCat(catRaw) ? catRaw : 'all';
+      const tfRaw = String(url.searchParams.get('tf') || DEFAULT_CTF);
+      const tf = isCtf(tfRaw) ? tfRaw : DEFAULT_CTF;
+      const { rows, quotes } = await marketFeed.board(cat, tf);
+      const out = chartsMeta({ cat, tf });
+      return sendJsonGzip(req, res, 200, {
+        at: new Date().toISOString(),
+        tf,
+        // Заголовок вкладки называет интервал — его и обновляем. Описание от
+        // интервала не зависит, поэтому в ответе ему делать нечего
+        title: out.title,
+        html: chartsBoard({ cat, tf, rows, quotes }),
+      });
+    }
+
+    // Фрагмент графика: страница инструмента и страница тикера. Ряд меняется
+    // на месте — перезагружать страницу ради одной картинки незачем
+    if (url.pathname === '/api/chart') {
+      const tfRaw = String(url.searchParams.get('tf') || '');
+      const slug = String(url.searchParams.get('slug') || '');
+      if (slug) {
+        const inst = instrumentBySlug(slug);
+        if (!inst) return sendJsonGzip(req, res, 404, { error: 'Инструмент не найден' });
+        const tf = isCtf(tfRaw) ? tfRaw : DEFAULT_CTF;
+        const { series, quote } = await marketFeed.one(inst, tf);
+        return sendJsonGzip(req, res, 200, {
+          tf,
+          title: `${inst.name}: ${CTF[tf].one} график и цена`,
+          // h1 страницы тоже называет интервал — без него заголовок разошёлся
+          // бы с тем, что нарисовано под ним
+          h1: `${inst.name}: ${CTF[tf].one} график, цена и история`,
+          html: instChartInner({ inst, series, quote, tf }),
+        });
+      }
+      const market = SLUG_MARKET[String(url.searchParams.get('market') || '').toLowerCase()];
+      const symbol = String(url.searchParams.get('symbol') || '');
+      const asset = market && symbol ? findAsset(market, symbol) : null;
+      if (!asset) return sendJsonGzip(req, res, 404, { error: 'Тикер не найден' });
+      const html = await chartHtmlFor(asset, { tf: tfRaw });
+      // chartHtmlFor отдаёт блок целиком, вместе с обёрткой: у тикера проще
+      // заменить секцию целиком, чем разбирать её на части
+      return sendJsonGzip(req, res, 200, { tf: tfRaw, html });
     }
 
     // Обновление карточек: отдаём готовую разметку, а не данные, — так подпись,

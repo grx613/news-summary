@@ -227,12 +227,28 @@
   // форматирование и подписи остаются в одном месте, а на клиенте нет ни одной
   // копии правил вывода. Дневные и крупнее не опрашиваются вовсе — data-poll
   // у них не выставлен, свеча за день в течение дня не меняется.
-  const grid = document.querySelector('.ggrid[data-poll]');
-  if (grid) {
+  // Опрос перезапускается при переключении интервала: у дневного ряда его нет,
+  // у минутного свой период, и таймер должен следовать за выбранной свечой
+  const polls = new Map();
+
+  const startPolling = (grid) => {
+    const stop = polls.get(grid);
+    if (stop) stop();
+    polls.delete(grid);
+    // Сетка, которую заменило переключение интервала, больше не в документе:
+    // её таймер иначе тикал бы вхолостую до перезагрузки страницы
+    for (const [old, kill] of polls) {
+      if (!old.isConnected) {
+        kill();
+        polls.delete(old);
+      }
+    }
+
     const cat = grid.dataset.cat || 'all';
     const tf = grid.dataset.tf || '1d';
     const every = Number(grid.dataset.poll) || 0;
-    let timer = null;
+    if (!every) return;
+
     let busy = false;
 
     const paint = (cards) => {
@@ -247,7 +263,7 @@
     const tick = async () => {
       // Вкладка в фоне не должна тянуть трафик: браузер и так режет таймеры,
       // но проверка избавляет от запроса сразу после возврата на вкладку
-      if (busy || document.hidden) return;
+      if (busy || document.hidden || !grid.isConnected) return;
       busy = true;
       try {
         const r = await fetch(`/api/charts?cat=${encodeURIComponent(cat)}&tf=${encodeURIComponent(tf)}`, {
@@ -261,15 +277,137 @@
       }
     };
 
-    if (every > 0) {
-      timer = setInterval(tick, every);
-      // Возврат на вкладку — хороший момент обновить сразу, а не ждать период
-      document.addEventListener('visibilitychange', () => {
-        if (!document.hidden) tick();
-      });
-      window.addEventListener('pagehide', () => clearInterval(timer));
+    const timer = setInterval(tick, every);
+    // Возврат на вкладку — хороший момент обновить сразу, а не ждать период
+    const onVisible = () => {
+      if (!document.hidden) tick();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('pagehide', () => clearInterval(timer));
+
+    polls.set(grid, () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    });
+  };
+
+  const firstGrid = document.querySelector('.ggrid[data-poll]');
+  if (firstGrid) startPolling(firstGrid);
+
+  // -------------------------------------------------- переключение интервала
+  // Кнопки интервала остаются обычными ссылками: без скрипта и для поисковика
+  // работает href. Здесь мы перехватываем нажатие и меняем только ряд, чтобы
+  // страница не мигала и не теряла место, где человек читал.
+  // Обработчик висит на документе, а не на блоке: у тикера блок заменяется
+  // целиком вместе со своими потомками, и обработчик на нём умер бы после
+  // первого же переключения
+  const loadFragment = async (board, tf) => {
+    const kind = board.dataset.live;
+    let url;
+    if (kind === 'charts') {
+      url = `/api/board?cat=${encodeURIComponent(board.dataset.cat || 'all')}&tf=${encodeURIComponent(tf)}`;
+    } else if (kind === 'inst') {
+      url = `/api/chart?slug=${encodeURIComponent(board.dataset.slug || '')}&tf=${encodeURIComponent(tf)}`;
+    } else {
+      url = `/api/chart?market=${encodeURIComponent(board.dataset.market || '')}&symbol=${encodeURIComponent(
+        board.dataset.symbol || ''
+      )}&tf=${encodeURIComponent(tf)}`;
     }
-  }
+    const r = await fetch(url, { headers: { Accept: 'application/json' } });
+    if (!r.ok) throw new Error('не удалось получить ряд');
+    return r.json();
+  };
+
+  // Само переключение. push=false — когда адрес уже пришёл от кнопки «назад»:
+  // новый шаг истории там не нужен, иначе назад пришлось бы нажимать дважды
+  const switchTf = async (board, link, tf, push) => {
+    const kind = board.dataset.live;
+
+    // Открытая таблица должна остаться открытой: разметка заменяется целиком,
+    // и <details> без этого схлопнулся бы на каждом переключении
+    const oldDetails = board.querySelector('details.chart-table');
+    const wasOpen = Boolean(oldDetails && oldDetails.open);
+
+    board.classList.add('loading');
+    try {
+      const data = await loadFragment(board, tf);
+
+      // У тикера ответ приходит вместе с обёрткой — заменяем секцию целиком,
+      // у сетки и инструмента меняем только внутренность
+      let live = board;
+      if (kind === 'ticker') {
+        const fresh = document.createElement('div');
+        fresh.innerHTML = data.html;
+        const next = fresh.firstElementChild;
+        if (!next) throw new Error('пустой ответ');
+        board.replaceWith(next);
+        live = next;
+      } else {
+        board.innerHTML = data.html;
+      }
+
+      const nextDetails = live.querySelector('details.chart-table');
+      if (nextDetails && wasOpen) nextDetails.open = true;
+
+      live.dataset.tf = tf;
+      // Опрос привязан к интервалу: у дневного его нет вовсе, у минутного
+      // свой период — старый таймер остался бы с чужим шагом
+      if (kind === 'charts') {
+        const grid = live.querySelector('.ggrid');
+        if (grid) startPolling(grid);
+      }
+
+      if (data.title) document.title = data.title;
+      if (data.h1) {
+        const h1 = document.querySelector('h1');
+        if (h1) h1.textContent = data.h1;
+      }
+
+      // Адрес берём из самой ссылки: в ней уже учтено, что интервал по
+      // умолчанию лишнего параметра не несёт
+      const u = new URL(link.href);
+      u.hash = '';
+      if (push) history.pushState({ tf }, '', u);
+      else history.replaceState({ tf }, '', u);
+    } catch (err) {
+      // Не смогли тихо — пусть сработает ссылка: честная загрузка лучше
+      // застывшего экрана
+      location.href = link.href;
+    } finally {
+      board.classList.remove('loading');
+    }
+  };
+
+  // Начальная запись истории тоже должна знать интервал: иначе «назад» с
+  // первого переключения вернёт адрес без параметра, а на экране останется
+  // прежний ряд — состояние и картинка разойдутся
+  const firstBoard = document.querySelector('[data-live]');
+  if (firstBoard) history.replaceState({ tf: firstBoard.dataset.tf }, '', location.href);
+
+  document.addEventListener('click', (e) => {
+    const link = e.target.closest('a[data-tf]');
+    if (!link) return;
+    const board = link.closest('[data-live]');
+    if (!board) return;
+    // Средняя кнопка, Ctrl/Cmd и Shift — человек хочет новую вкладку или
+    // загрузку: отдаём ссылке сделать своё дело
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+
+    const tf = link.dataset.tf;
+    if (!tf || tf === board.dataset.tf) return;
+    e.preventDefault();
+    switchTf(board, link, tf, true);
+  });
+
+  // Кнопка «назад» после переключения должна возвращать прежний интервал,
+  // а не прошлую страницу: адрес менялся через pushState
+  window.addEventListener('popstate', (e) => {
+    const tf = e.state && e.state.tf;
+    const board = document.querySelector('[data-live]');
+    if (!board || !tf || tf === board.dataset.tf) return;
+    const link = board.querySelector(`a[data-tf="${tf}"]`);
+    if (link) switchTf(board, link, tf, false);
+  });
 
   // Кнопки отправки блокируем на время запроса, иначе двойной клик даёт два сообщения
   document.querySelectorAll('.forum-form').forEach((f) => {
