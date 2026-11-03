@@ -294,18 +294,18 @@
   const firstGrid = document.querySelector('.ggrid[data-poll]');
   if (firstGrid) startPolling(firstGrid);
 
-  // -------------------------------------------------- переключение интервала
-  // Кнопки интервала остаются обычными ссылками: без скрипта и для поисковика
-  // работает href. Здесь мы перехватываем нажатие и меняем только ряд, чтобы
+  // ------------------------------ переключение интервала и категории
+  // Кнопки остаются обычными ссылками: без скрипта и для поисковика работает
+  // href. Здесь мы перехватываем нажатие и меняем только нужный кусок, чтобы
   // страница не мигала и не теряла место, где человек читал.
   // Обработчик висит на документе, а не на блоке: у тикера блок заменяется
   // целиком вместе со своими потомками, и обработчик на нём умер бы после
   // первого же переключения
-  const loadFragment = async (board, tf) => {
+  const loadFragment = async (board, tf, cat) => {
     const kind = board.dataset.live;
     let url;
     if (kind === 'charts') {
-      url = `/api/board?cat=${encodeURIComponent(board.dataset.cat || 'all')}&tf=${encodeURIComponent(tf)}`;
+      url = `/api/board?cat=${encodeURIComponent(cat || 'all')}&tf=${encodeURIComponent(tf)}`;
     } else if (kind === 'inst') {
       url = `/api/chart?slug=${encodeURIComponent(board.dataset.slug || '')}&tf=${encodeURIComponent(tf)}`;
     } else {
@@ -318,10 +318,13 @@
     return r.json();
   };
 
-  // Само переключение. push=false — когда адрес уже пришёл от кнопки «назад»:
-  // новый шаг истории там не нужен, иначе назад пришлось бы нажимать дважды
-  const switchTf = async (board, link, tf, push) => {
+  // Само переключение. push=false — когда состояние уже пришло от кнопки
+  // «назад»: новый шаг истории там не нужен, иначе назад пришлось бы
+  // нажимать дважды. link — ссылка, на которую нажали: из неё берётся адрес
+  const switchBoard = async (board, link, { tf, cat, href }, push) => {
     const kind = board.dataset.live;
+    const nextTf = tf || board.dataset.tf;
+    const nextCat = cat || board.dataset.cat || 'all';
 
     // Открытая таблица должна остаться открытой: разметка заменяется целиком,
     // и <details> без этого схлопнулся бы на каждом переключении
@@ -330,7 +333,7 @@
 
     board.classList.add('loading');
     try {
-      const data = await loadFragment(board, tf);
+      const data = await loadFragment(board, nextTf, nextCat);
 
       // У тикера ответ приходит вместе с обёрткой — заменяем секцию целиком,
       // у сетки и инструмента меняем только внутренность
@@ -349,7 +352,8 @@
       const nextDetails = live.querySelector('details.chart-table');
       if (nextDetails && wasOpen) nextDetails.open = true;
 
-      live.dataset.tf = tf;
+      live.dataset.tf = nextTf;
+      if (kind === 'charts') live.dataset.cat = nextCat;
       // Опрос привязан к интервалу: у дневного его нет вовсе, у минутного
       // свой период — старый таймер остался бы с чужим шагом
       if (kind === 'charts') {
@@ -357,56 +361,90 @@
         if (grid) startPolling(grid);
       }
 
+      // Заголовок вкладки, h1 и описание в ответе есть только там, где они
+      // зависят от выбранного — иначе трогать их незачем
       if (data.title) document.title = data.title;
       if (data.h1) {
-        const h1 = document.querySelector('h1');
+        const h1 = document.getElementById('page-h1');
         if (h1) h1.textContent = data.h1;
       }
+      // Описание у категорий разное: вкладка «Все» обещает все рынки, у
+      // «Индексов» их пять. Оставлять старое — значит описывать не то, что
+      // открыто, в том числе для «поделиться ссылкой»
+      if (data.description) {
+        const md = document.querySelector('meta[name="description"]');
+        if (md) md.setAttribute('content', data.description);
+      }
 
-      // Адрес берём из самой ссылки: в ней уже учтено, что интервал по
-      // умолчанию лишнего параметра не несёт
-      const u = new URL(link.href);
+      // Адрес: при нажатии — из самой ссылки (в ней уже учтено, что вкладка
+      // «Все» и интервал по умолчанию лишних параметров не несут), при
+      // возврате «назад» — собранный из состояния, там нужны оба параметра
+      const u = href ? new URL(href, location.origin) : new URL(link.href);
       u.hash = '';
-      if (push) history.pushState({ tf }, '', u);
-      else history.replaceState({ tf }, '', u);
+      if (push) history.pushState({ tf: nextTf, cat: nextCat }, '', u);
+      else history.replaceState({ tf: nextTf, cat: nextCat }, '', u);
     } catch (err) {
       // Не смогли тихо — пусть сработает ссылка: честная загрузка лучше
       // застывшего экрана
-      location.href = link.href;
+      location.href = href || (link ? link.href : location.href);
     } finally {
       board.classList.remove('loading');
     }
   };
 
-  // Начальная запись истории тоже должна знать интервал: иначе «назад» с
-  // первого переключения вернёт адрес без параметра, а на экране останется
+  // Вкладка «Графиков» и кнопки интервала лежат в одном блоке: отличаем их
+  // по атрибуту, который поставил сервер
+  const boardFromClick = (e) => {
+    const link = e.target.closest('a[data-tf], a[data-cat]');
+    if (!link) return null;
+    const board = link.closest('[data-live]');
+    // Категории есть только у сетки — ссылки на каталог и меню не перехватываем
+    if (!board || (link.dataset.cat && board.dataset.live !== 'charts')) return null;
+    return { link, board };
+  };
+
+  // Начальная запись истории тоже должна знать, что показано: иначе «назад»
+  // с первого переключения вернёт адрес без параметра, а на экране останется
   // прежний ряд — состояние и картинка разойдутся
   const firstBoard = document.querySelector('[data-live]');
-  if (firstBoard) history.replaceState({ tf: firstBoard.dataset.tf }, '', location.href);
+  if (firstBoard) {
+    history.replaceState({ tf: firstBoard.dataset.tf, cat: firstBoard.dataset.cat }, '', location.href);
+  }
 
   document.addEventListener('click', (e) => {
-    const link = e.target.closest('a[data-tf]');
-    if (!link) return;
-    const board = link.closest('[data-live]');
-    if (!board) return;
+    const hit = boardFromClick(e);
+    if (!hit) return;
+    const { link, board } = hit;
     // Средняя кнопка, Ctrl/Cmd и Shift — человек хочет новую вкладку или
     // загрузку: отдаём ссылке сделать своё дело
     if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
 
     const tf = link.dataset.tf;
-    if (!tf || tf === board.dataset.tf) return;
+    const cat = link.dataset.cat;
+    // Нажатие на текущую вкладку или текущий интервал — не переключение
+    if (cat && cat === (board.dataset.cat || 'all')) return;
+    if (tf && !cat && tf === board.dataset.tf) return;
     e.preventDefault();
-    switchTf(board, link, tf, true);
+    switchBoard(board, link, { tf, cat }, true);
   });
 
-  // Кнопка «назад» после переключения должна возвращать прежний интервал,
-  // а не прошлую страницу: адрес менялся через pushState
+  // Кнопка «назад» после переключения должна возвращать прежний интервал
+  // или прежнюю вкладку, а не прошлую страницу: адрес менялся через pushState
   window.addEventListener('popstate', (e) => {
-    const tf = e.state && e.state.tf;
+    const st = e.state || {};
     const board = document.querySelector('[data-live]');
-    if (!board || !tf || tf === board.dataset.tf) return;
-    const link = board.querySelector(`a[data-tf="${tf}"]`);
-    if (link) switchTf(board, link, tf, false);
+    if (!board) return;
+    const cat = st.cat || 'all';
+    const tf = st.tf || board.dataset.tf;
+    if (tf === board.dataset.tf && cat === (board.dataset.cat || 'all')) return;
+    // Адрес собираем сами: в разметке каждая ссылка несёт только свой
+    // параметр, а после «назад» нужны оба сразу
+    const u = new URL(location.href);
+    if (cat === 'all') u.searchParams.delete('cat');
+    else u.searchParams.set('cat', cat);
+    if (tf === board.dataset.defaultTf) u.searchParams.delete('tf');
+    else u.searchParams.set('tf', tf);
+    switchBoard(board, null, { tf, cat, href: u.href }, false);
   });
 
   // Кнопки отправки блокируем на время запроса, иначе двойной клик даёт два сообщения

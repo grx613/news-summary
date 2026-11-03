@@ -1806,10 +1806,12 @@ ${[...new Set(paths)]
       const out = chartsMeta({ cat, tf });
       return sendJsonGzip(req, res, 200, {
         at: new Date().toISOString(),
+        cat,
         tf,
-        // Заголовок вкладки называет интервал — его и обновляем. Описание от
-        // интервала не зависит, поэтому в ответе ему делать нечего
+        // Заголовок вкладки и описание называют категорию и интервал: без них
+        // в браузере осталось бы название вкладки, которую уже не видно
         title: out.title,
+        description: out.description,
         html: chartsBoard({ cat, tf, rows, quotes }),
       });
     }
