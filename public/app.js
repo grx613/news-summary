@@ -204,6 +204,23 @@
     });
   });
 
+  // Кнопка «Наверх» появляется после прокрутки и плавно уходит наверху.
+  // Слушатель passive: прокрутка не должна ждать обработчик. Порог в один
+  // экран — пока видна шапка, кнопка не нужна и место в углу не занимает
+  const toTop = document.querySelector('.totop');
+  if (toTop) {
+    let shown = false;
+    const paint = () => {
+      const want = window.scrollY > window.innerHeight * 0.75;
+      if (want === shown) return;
+      shown = want;
+      toTop.classList.toggle('on', want);
+    };
+    window.addEventListener('scroll', paint, { passive: true });
+    window.addEventListener('resize', paint, { passive: true });
+    paint();
+  }
+
   // Кнопки отправки блокируем на время запроса, иначе двойной клик даёт два сообщения
   document.querySelectorAll('.forum-form').forEach((f) => {
     f.addEventListener('submit', () => {

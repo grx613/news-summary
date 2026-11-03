@@ -329,8 +329,20 @@ details.cat > summary:hover h2 { color: var(--accent); }
   padding: 9px 14px; border-radius: 999px; font-size: 13.5px; text-decoration: none;
   color: var(--text); background: var(--card2); border: 1px solid var(--border);
   box-shadow: 0 4px 14px rgba(0,0,0,.35);
+  /* Наверху страницы кнопка не нужна: она закрывает текст, а возвращаться
+     некуда. Класс .on вешает скрипт по прокрутке, а при отключённом JS
+     видимость возвращает <noscript> в разметке страницы */
+  opacity: 0; visibility: hidden; transform: translateY(8px);
+  transition: opacity .2s ease, transform .2s ease, visibility .2s;
 }
+.totop.on { opacity: 1; visibility: visible; transform: none; }
+/* Клавиатура: кнопка не должна исчезать из-под фокуса, если человек
+   добрался до неё табом, а страница при этом наверху */
+.totop:focus-visible { opacity: 1; visibility: visible; transform: none; }
 .totop:hover { border-color: var(--accent); color: var(--accent); }
+@media (prefers-reduced-motion: reduce) {
+  .totop { transition: none; }
+}
 @media (max-width: 640px) {
   /* На телефоне кнопка не должна закрывать текст — остаётся один знак */
   .totop { right: 12px; bottom: 12px; padding: 10px 13px; font-size: 15px; }
