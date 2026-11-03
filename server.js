@@ -832,6 +832,9 @@ function meta(rec, cached) {
     cached,
     expiresAt: new Date(new Date(rec.generatedAt).getTime() + CACHE_TTL_MS).toISOString(),
     nextRefreshAt: new Date(new Date(rec.generatedAt).getTime() + REFRESH_COOLDOWN_MS).toISOString(),
+    // Часы нужны тексту предупреждения об устаревании: он должен называть настоящий
+    // TTL, а не зашитое в шаблон число, которое разойдётся с настройкой
+    ttlHours: Math.round(CACHE_TTL_MS / 3600_000),
   };
 }
 
