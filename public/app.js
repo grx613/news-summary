@@ -403,6 +403,10 @@
       const nextDetails = live.querySelector('details.chart-table');
       if (nextDetails && wasOpen) nextDetails.open = true;
 
+      // Выбранный интервал запоминается на год: он один на весь сайт, и на
+      // «Графиках», и на тикере, поэтому меняется там же, где нажали
+      if (tf) document.cookie = `tf=${encodeURIComponent(nextTf)}; Path=/; Max-Age=31536000; SameSite=Lax`;
+
       live.dataset.tf = nextTf;
       if (kind === 'charts') live.dataset.cat = nextCat;
       // Опрос привязан к интервалу: у дневного его нет вовсе, у минутного
@@ -460,6 +464,12 @@
   const firstBoard = document.querySelector('[data-live]');
   if (firstBoard) {
     history.replaceState({ tf: firstBoard.dataset.tf, cat: firstBoard.dataset.cat }, '', location.href);
+    // Пришли по ссылке с интервалом — он же и запомнился. Нажатие перехвачено
+    // выше, но ссылку могли открыть в новой вкладке или прислать её извне
+    const asked = new URL(location.href).searchParams.get('tf');
+    if (asked === firstBoard.dataset.tf) {
+      document.cookie = `tf=${encodeURIComponent(asked)}; Path=/; Max-Age=31536000; SameSite=Lax`;
+    }
   }
 
   document.addEventListener('click', (e) => {
@@ -491,10 +501,15 @@
     // Адрес собираем сами: в разметке каждая ссылка несёт только свой
     // параметр, а после «назад» нужны оба сразу
     const u = new URL(location.href);
-    if (cat === 'all') u.searchParams.delete('cat');
+    // Категория есть только у сетки: на странице инструмента её в адресе быть
+    // не должно, там категорию задаёт сам инструмент
+    if (board.dataset.live !== 'charts') u.searchParams.delete('cat');
+    else if (cat === 'all') u.searchParams.delete('cat');
     else u.searchParams.set('cat', cat);
-    if (tf === board.dataset.defaultTf) u.searchParams.delete('tf');
-    else u.searchParams.set('tf', tf);
+    // Интервал в адресе остаётся всегда, даже если он совпадает с умолчанием:
+    // голый адрес означает «взять запомненный», и после возврата «назад»
+    // страница рассказывала бы не о том ряде, который на экране
+    u.searchParams.set('tf', tf);
     switchBoard(board, null, { tf, cat, href: u.href }, false);
   });
 

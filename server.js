@@ -23,10 +23,10 @@ import {
 } from './lib/summary-translate.js';
 import {
   createMarketFeed,
-  isCtf,
   isCat,
   DEFAULT_CTF,
   CTF,
+  CTF_ORDER,
   CATS,
   INSTRUMENTS,
   instrumentBySlug,
@@ -39,7 +39,7 @@ import {
   chartsBoard,
   chartsMeta,
   instrumentPage,
-  instChartInner,
+  instBoard,
   cardInnerHtml,
   pollFor,
   unitToken,
@@ -1080,6 +1080,49 @@ function setSessionCookie(res, key, { maxAge = 365 * 24 * 3600 } = {}) {
   res.setHeader('Set-Cookie', parts.join('; '));
 }
 
+// Интервал свечей запоминается одной кукой на весь сайт: выбрал «День» на
+// одном графике — тот же интервал откроется и на следующем, и на тикере.
+// Куку пишет скрипт (переключение идёт без перезагрузки), а сервер читает её,
+// когда в адресе нет явного ?tf=. Порядок: адрес, потом кука, потом умолчание
+// страницы — поисковик кук не присылает и видит тот интервал, что обещан
+// в заголовке и canonical.
+const TF_COOKIE = 'tf';
+
+// Ближайший интервал из тех, что страница вообще умеет показать. Наборы
+// рынков разные: у Мосбиржи есть 10 минут и нет 30, у США наоборот. Оставить
+// запомненное число как есть значило бы отдать 404 или пустой ряд
+function nearestTf(key, list) {
+  if (!key || list.includes(key)) return key || null;
+  const want = TIMEFRAMES[key]?.sec;
+  if (!want) return null;
+  // Сравниваем логарифмы: разница «5 мин против 15» и «час против трёх часов»
+  // в секундах несопоставима, а на слух это одно и то же расстояние
+  let best = null;
+  let bestGap = Infinity;
+  for (const k of list) {
+    const gap = Math.abs(Math.log(TIMEFRAMES[k].sec / want));
+    if (gap < bestGap) {
+      bestGap = gap;
+      best = k;
+    }
+  }
+  return best;
+}
+
+// Интервал страницы: явный параметр главнее запомненного
+function pickTf(req, url, list, fallback) {
+  const raw = String(url.searchParams.get('tf') || '');
+  if (raw && list.includes(raw)) return raw;
+  return nearestTf(parseCookies(req)[TF_COOKIE], list) || fallback;
+}
+
+// Интервал пришёл из куки, а не из адреса. Такой ответ у каждого посетителя
+// свой: в общий кеш его отдавать нельзя, браузеру — можно, ключ там меняется
+// вместе с кукой (Vary: Cookie)
+function tfFromCookie(req, url) {
+  return !url.searchParams.get('tf') && Boolean(parseCookies(req)[TF_COOKIE]);
+}
+
 function clearSessionCookie(res) {
   res.setHeader('Set-Cookie', `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
 }
@@ -2037,10 +2080,9 @@ ${[...new Set(paths)].map(entry).join('\n')}
     if (url.pathname === '/charts' || url.pathname === '/charts/') {
       const catRaw = String(url.searchParams.get('cat') || 'all');
       const cat = isCat(catRaw) ? catRaw : 'all';
-      const tfRaw = String(url.searchParams.get('tf') || DEFAULT_CTF);
-      // Неизвестный интервал откатывается на тот, что открывается по умолчанию:
+      // Неизвестный интервал откатывается на запомненный, а тот — на умолчание:
       // страница не должна отдавать 404 из-за параметра, набранного руками
-      const tf = isCtf(tfRaw) ? tfRaw : DEFAULT_CTF;
+      const tf = pickTf(req, url, CTF_ORDER, DEFAULT_CTF);
       const { rows, quotes } = await marketFeed.board(cat, tf);
       // Котировки индексов заменяются живыми: иначе карточка считает
       // процент по полю Мосбиржи «к предыдущей сделке»
@@ -2059,7 +2101,7 @@ ${[...new Set(paths)].map(entry).join('\n')}
         // Дневные и крупнее меняются раз в сутки, минутные — постоянно:
         // кешировать их одинаково значило бы показывать пятиминутную давность.
         // Признак — сам интервал, а не «тот, что открывается по умолчанию»
-        { cache: CTF[tf]?.daily ? 'public, max-age=120' : 'no-store' }
+        { cache: CTF[tf]?.daily ? (tfFromCookie(req, url) ? 'private, max-age=120' : 'public, max-age=120') : 'no-store' }
       );
     }
 
@@ -2071,8 +2113,7 @@ ${[...new Set(paths)].map(entry).join('\n')}
       if (!inst) {
         return sendHtml(res, notFoundPage({ siteUrl: SITE_URL, siteName: SITE_NAME }), { status: 404, cache: 'no-store' });
       }
-      const tfRaw = String(url.searchParams.get('tf') || DEFAULT_CTF);
-      const tf = isCtf(tfRaw) ? tfRaw : DEFAULT_CTF;
+      const tf = pickTf(req, url, CTF_ORDER, DEFAULT_CTF);
       const { series, quote } = await marketFeed.one(inst, tf);
       const liveQuote = liveForInstrument(inst, quote);
       const out = instrumentPage({ inst, series, quote: liveQuote, tf, siteUrl: SITE_URL, siteName: SITE_NAME });
@@ -2085,9 +2126,13 @@ ${[...new Set(paths)].map(entry).join('\n')}
           canonical: out.canonical,
           body: out.body,
           jsonLd: out.jsonLd,
+          // Та же ширина, что у сетки: меню стоит на одном месте на обеих
+          // страницах, а не сдвигается вместе с границей колонки
+          wide: true,
         }),
-        // Та же логика, что у сетки: минутный ряд живёт секунды, дневной — сутки
-        { cache: CTF[tf]?.daily ? 'public, max-age=120' : 'no-store' }
+        // Та же логика, что у сетки: минутный ряд живёт секунды, дневной — сутки,
+        // а запомненный в куке интервал — своё у каждого
+        { cache: CTF[tf]?.daily ? (tfFromCookie(req, url) ? 'private, max-age=120' : 'public, max-age=120') : 'no-store' }
       );
     }
 
@@ -2097,8 +2142,7 @@ ${[...new Set(paths)].map(entry).join('\n')}
     if (url.pathname === '/api/board') {
       const catRaw = String(url.searchParams.get('cat') || 'all');
       const cat = isCat(catRaw) ? catRaw : 'all';
-      const tfRaw = String(url.searchParams.get('tf') || DEFAULT_CTF);
-      const tf = isCtf(tfRaw) ? tfRaw : DEFAULT_CTF;
+      const tf = pickTf(req, url, CTF_ORDER, DEFAULT_CTF);
       const { rows, quotes } = await marketFeed.board(cat, tf);
       // Котировки индексов заменяются живыми: иначе карточка считает
       // процент по полю Мосбиржи «к предыдущей сделке»
@@ -2119,30 +2163,30 @@ ${[...new Set(paths)].map(entry).join('\n')}
     // Фрагмент графика: страница инструмента и страница тикера. Ряд меняется
     // на месте — перезагружать страницу ради одной картинки незачем
     if (url.pathname === '/api/chart') {
-      const tfRaw = String(url.searchParams.get('tf') || '');
       const slug = String(url.searchParams.get('slug') || '');
       if (slug) {
         const inst = instrumentBySlug(slug);
         if (!inst) return sendJsonGzip(req, res, 404, { error: t('Инструмент не найден') });
-        const tf = isCtf(tfRaw) ? tfRaw : DEFAULT_CTF;
+        const tf = pickTf(req, url, CTF_ORDER, DEFAULT_CTF);
         const { series, quote } = await marketFeed.one(inst, tf);
         return sendJsonGzip(req, res, 200, {
           tf,
           title: t('{name}: {tf} график и цена', { name: t(inst.name), tf: t(CTF[tf].one) }),
-          // h1 страницы тоже называет интервал — без него заголовок разошёлся
-          // бы с тем, что нарисовано под ним
-          h1: t('{name}: {tf} график, цена и история', { name: t(inst.name), tf: t(CTF[tf].one) }),
-          html: instChartInner({ inst, series, quote: liveForInstrument(inst, quote), tf }),
+          // Меню, h1 и график приходят одним куском: полоса интервалов стоит
+          // над заголовком, и без неё в ответе отмеченный интервал остался бы
+          // прежним, пока под ним уже нарисован новый ряд
+          html: instBoard({ inst, series, quote: liveForInstrument(inst, quote), tf }),
         });
       }
       const market = SLUG_MARKET[String(url.searchParams.get('market') || '').toLowerCase()];
       const symbol = String(url.searchParams.get('symbol') || '');
       const asset = market && symbol ? findAsset(market, symbol) : null;
       if (!asset) return sendJsonGzip(req, res, 404, { error: t('Тикер не найден') });
-      const html = await chartHtmlFor(asset, { tf: tfRaw });
+      const tfTicker = pickTf(req, url, tfList(asset.market), DEFAULT_TF);
+      const html = await chartHtmlFor(asset, { tf: tfTicker });
       // chartHtmlFor отдаёт блок целиком, вместе с обёрткой: у тикера проще
       // заменить секцию целиком, чем разбирать её на части
-      return sendJsonGzip(req, res, 200, { tf: tfRaw, html });
+      return sendJsonGzip(req, res, 200, { tf: tfTicker, html });
     }
 
     // Живые котировки для уже открытой страницы. Отдаём готовые строки, а не
@@ -2190,8 +2234,7 @@ ${[...new Set(paths)].map(entry).join('\n')}
 
     if (url.pathname === '/api/charts') {
       const cat = isCat(String(url.searchParams.get('cat') || '')) ? String(url.searchParams.get('cat')) : 'all';
-      const tfRaw = String(url.searchParams.get('tf') || DEFAULT_CTF);
-      const tf = isCtf(tfRaw) ? tfRaw : DEFAULT_CTF;
+      const tf = pickTf(req, url, CTF_ORDER, DEFAULT_CTF);
       const { rows, quotes } = await marketFeed.board(cat, tf);
       // Котировки индексов заменяются живыми: иначе карточка считает
       // процент по полю Мосбиржи «к предыдущей сделке»
@@ -2561,7 +2604,9 @@ ${[...new Set(paths)].map(entry).join('\n')}
       const key = cacheKey(asset);
       const rec = cache[key];
       const user = currentUser(req);
-      const tfParam = String(url.searchParams.get('tf') || '');
+      // Интервал тот же, что запомнен на «Графиках»: выбрав «День» там,
+      // человек ждёт день и на странице бумаги
+      const tfParam = pickTf(req, url, tfList(asset.market), DEFAULT_TF);
       const chartHtml = await chartHtmlFor(asset, { tf: tfParam });
       const html = tickerPage({
         asset,
@@ -2586,7 +2631,15 @@ ${[...new Set(paths)].map(entry).join('\n')}
       // дневного: иначе человек полчаса видел бы минутные свечи пятиминутной давности
       const intraday = TIMEFRAMES[tfParam] && !TIMEFRAMES[tfParam].daily;
       return sendHtml(res, html, {
-        cache: user.me || intraday ? 'no-store' : rec ? 'public, max-age=300' : 'no-store',
+        // Интервал из куки у каждого свой — такой ответ в общий кеш не годится,
+        // но браузеру его держать можно: ключ меняется вместе с кукой
+        cache: user.me || intraday
+          ? 'no-store'
+          : tfFromCookie(req, url)
+            ? 'private, max-age=300'
+            : rec
+              ? 'public, max-age=300'
+              : 'no-store',
       });
     }
 

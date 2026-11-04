@@ -452,6 +452,10 @@ a.ftree-row:hover .ft-text { color: var(--accent); }
    весь рынок разом, а не разглядывать одну бумагу. Ширина шире обычной колонки
    (980 px), иначе в ряд помещаются две карточки и сравнение теряет смысл */
 .wide { max-width: 1280px; }
+/* Меню «Графиков» стоит на обеих страницах сразу под меню сайта и с одинаковым
+   отступом: при переходе между сеткой и инструментом кнопки не сдвигаются */
+.gnav { margin: 18px 0 22px; }
+.gnav .gtabs { margin: 0 0 6px; }
 .gtabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 6px; }
 .gtab {
   padding: 8px 18px; border-radius: 999px; font-size: 14.5px; text-decoration: none;
@@ -459,7 +463,7 @@ a.ftree-row:hover .ft-text { color: var(--accent); }
 }
 .gtab:hover { border-color: var(--accent); color: var(--accent); }
 .gtab.on { background: var(--accent); border-color: var(--accent); color: #fff; }
-.gperiods { margin: 10px 0 18px; }
+.gperiods { margin: 10px 0 0; }
 
 .ggrid {
   display: grid; gap: 14px;
@@ -500,10 +504,12 @@ a.gcard:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (max-width: 640px) {
   .ggrid { grid-template-columns: 1fr; }
   .gchart svg { height: 165px; }
+  .gnav { margin-bottom: 16px; }
+  .inst-chart .chart svg { height: 200px; }
 }
-
-/* Хлебные крошки на странице инструмента: видно, из какой вкладки пришёл
-   человек, и можно вернуться на шаг назад, не открывая меню */
-.crumbs { color: var(--muted); font-size: 13px; margin: 14px 0 2px; }
-.crumbs a { color: var(--muted); text-decoration: none; }
-.crumbs a:hover { color: var(--accent); }
+/* График инструмента на широкой странице: та же ширина, что у сетки, поэтому
+   свечи получают больше места по горизонтали, а не растягиваются в ленту */
+.inst-chart .chart svg { height: 320px; }
+/* Описание инструмента ушло под график: меню и заголовок должны стоять на том
+   же месте, что и на сетке, а длина этого абзаца у каждого своя */
+.inst-what { margin-top: 18px; }
