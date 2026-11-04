@@ -33,6 +33,7 @@ import {
   notFoundPage,
   page,
 } from './lib/render.js';
+import { langFromPath, withLang, getLang, href as langHref, LANGS, DEFAULT_LANG, defineDict } from './lib/i18n.js';
 import {
   QA_SCHEMA,
   createQuestionStore,
@@ -984,9 +985,11 @@ const safeNext = (raw, fallback = '/catalog') => {
   return s;
 };
 
-// Ответ на форму: 303 на GET, чтобы обновление страницы не отправляло пост второй раз
+// Ответ на форму: 303 на GET, чтобы обновление страницы не отправляло пост второй раз.
+// Адрес переводится в язык текущего запроса: ответ на форму на /en/... не должен
+// выбрасывать человека в русскую версию
 const redirect = (res, location) => {
-  res.writeHead(303, { Location: location });
+  res.writeHead(303, { Location: langHref(getLang(), location) });
   res.end();
 };
 
@@ -1471,8 +1474,10 @@ function checkAuth(req, res) {
   return false;
 }
 
-const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, `http://${req.headers.host}`);
+// Язык живёт в адресе, поэтому префикс снимается до разбора маршрутов: дальше
+// весь код работает с путём без префикса и не знает, на каком языке страница.
+// Так `/en/ticker/us/AAPL` и `/ticker/us/AAPL` попадают в один и тот же обработчик
+const handleRequest = async (req, res, url) => {
   if (!checkAuth(req, res)) return;
   const ip = clientIp(req);
   try {
@@ -1678,7 +1683,7 @@ ${[...new Set(paths)]
 
       // Корень форума больше не нужен: обсуждения ищутся на странице бумаги
       if (seg === '') {
-        res.writeHead(303, { Location: '/catalog' });
+        res.writeHead(303, { Location: langHref(getLang(), '/catalog') });
         return res.end();
       }
 
@@ -1792,7 +1797,7 @@ ${[...new Set(paths)]
       if (Number.isInteger(oldId) && oldId > 0) {
         const thread = forumStore.byId(oldId);
         if (!thread || thread.hidden) return sendHtml(res, forumNotFound({ siteUrl: SITE_URL }), { status: 404, cache: 'no-store' });
-        res.writeHead(301, { Location: threadPath(thread) });
+        res.writeHead(301, { Location: langHref(getLang(), threadPath(thread)) });
         return res.end();
       }
 
@@ -1990,7 +1995,7 @@ ${[...new Set(paths)]
     // POST /ticker/us/AAPL/ask: ответ собирается один раз и сохраняется как публичная страница
     if (url.pathname.startsWith('/ticker/') && url.pathname.endsWith('/ask')) {
       if (req.method !== 'POST') {
-        res.writeHead(303, { Location: url.pathname.replace(/\/ask$/, '') });
+        res.writeHead(303, { Location: langHref(getLang(), url.pathname.replace(/\/ask$/, '')) });
         return res.end();
       }
       const [, , slugRaw, symRaw] = url.pathname.split('/');
@@ -2005,7 +2010,7 @@ ${[...new Set(paths)]
 
       const invalid = validateQuestion(question);
       if (invalid) {
-        res.writeHead(303, { Location: back + encodeURIComponent(invalid) });
+        res.writeHead(303, { Location: langHref(getLang(), back) + encodeURIComponent(invalid) });
         return res.end();
       }
 
@@ -2013,7 +2018,7 @@ ${[...new Set(paths)]
       const rec = cache[key];
       if (!rec) {
         res.writeHead(303, {
-          Location: `${tickerPath(asset)}?err=` + encodeURIComponent('Сначала соберите сводку по тикеру — вопрос отвечается по её публикациям.'),
+          Location: `${langHref(getLang(), tickerPath(asset))}?err=` + encodeURIComponent('Сначала соберите сводку по тикеру — вопрос отвечается по её публикациям.'),
         });
         return res.end();
       }
@@ -2021,20 +2026,20 @@ ${[...new Set(paths)]
       // Тот же вопрос второй раз не оплачиваем: отдаём готовый ответ
       const existing = questionStore.findByHash(key, question);
       if (existing) {
-        res.writeHead(303, { Location: questionPath(asset, existing) });
+        res.writeHead(303, { Location: langHref(getLang(), questionPath(asset, existing)) });
         return res.end();
       }
 
       const ipWait = ipBucket(ip, 'gen', 3600_000, MAX_GEN_PER_IP_HOUR);
       if (ipWait) {
         res.writeHead(303, {
-          Location: `${tickerPath(asset)}?err=` + encodeURIComponent(`Лимит вопросов исчерпан. Попробуйте через ${Math.ceil(ipWait / 60)} мин.`),
+          Location: `${langHref(getLang(), tickerPath(asset))}?err=` + encodeURIComponent(`Лимит вопросов исчерпан. Попробуйте через ${Math.ceil(ipWait / 60)} мин.`),
         });
         return res.end();
       }
       if (!allowGeneration()) {
         res.writeHead(303, {
-          Location: `${tickerPath(asset)}?err=` + encodeURIComponent('Сервис перегружен, попробуйте через несколько минут.'),
+          Location: `${langHref(getLang(), tickerPath(asset))}?err=` + encodeURIComponent('Сервис перегружен, попробуйте через несколько минут.'),
         });
         return res.end();
       }
@@ -2043,7 +2048,7 @@ ${[...new Set(paths)]
         const reject = (kind) => {
           log(`вопрос ${key} отклонён (${kind}): ${question.slice(0, 80)}`);
           res.writeHead(303, {
-            Location: `${tickerPath(asset)}?err=` + encodeURIComponent(VERDICT_MESSAGE[kind] || VERDICT_MESSAGE.off_topic),
+            Location: `${langHref(getLang(), tickerPath(asset))}?err=` + encodeURIComponent(VERDICT_MESSAGE[kind] || VERDICT_MESSAGE.off_topic),
           });
           return res.end();
         };
@@ -2075,11 +2080,11 @@ ${[...new Set(paths)]
           costUsd: ans.meta?.costUsd,
         });
         log(`вопрос ${key} [${ans.mode}]: ${question.slice(0, 80)}`);
-        res.writeHead(303, { Location: questionPath(asset, stored) });
+        res.writeHead(303, { Location: langHref(getLang(), questionPath(asset, stored)) });
         return res.end();
       } catch (e) {
         log(`вопрос ${key} не удался: ${e.message}`);
-        res.writeHead(303, { Location: `${tickerPath(asset)}?err=` + encodeURIComponent(e.message) });
+        res.writeHead(303, { Location: `${langHref(getLang(), tickerPath(asset))}?err=` + encodeURIComponent(e.message) });
         return res.end();
       }
     }
@@ -2356,6 +2361,18 @@ ${[...new Set(paths)]
     if (e.status !== 404) console.error(e);
     sendJson(res, e.status || 500, { error: e.message });
   }
+};
+
+const server = http.createServer((req, res) => {
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  const { lang, path } = langFromPath(url.pathname);
+  // Служебные адреса и статика существуют в одном экземпляре на весь сайт:
+  // /api, /app.css, /robots.txt не переводятся и префикса не имеют
+  const isService = /^\/api\//.test(url.pathname) || /\.[a-z0-9]+$/i.test(url.pathname);
+  if (!isService) url.pathname = path;
+  // Путь для переключателя языка — снятый: с него строятся ссылки на ту же
+  // страницу в других языках, и префикс не должен накапливаться
+  return withLang(lang, () => handleRequest(req, res, url), path);
 });
 
 server.listen(PORT, HOST, () => {
