@@ -313,7 +313,7 @@
       if (busy || document.hidden || !grid.isConnected) return;
       busy = true;
       try {
-        const r = await fetch(`/api/charts?cat=${encodeURIComponent(cat)}&tf=${encodeURIComponent(tf)}`, {
+        const r = await fetch(`/api/charts?cat=${encodeURIComponent(cat)}&tf=${encodeURIComponent(tf)}&lang=${encodeURIComponent(LANG)}`, {
           headers: { Accept: 'application/json' },
         });
         if (r.ok) paint((await r.json()).cards);
@@ -351,14 +351,18 @@
   const loadFragment = async (board, tf, cat) => {
     const kind = board.dataset.live;
     let url;
+    // Язык едет вместе с запросом: у /api нет префикса адреса, и без параметра
+    // сервер отвечает по-русски — на английской странице переключение
+    // интервала вставляло бы русские подписи и ссылки
+    const langQ = `&lang=${encodeURIComponent(LANG)}`;
     if (kind === 'charts') {
-      url = `/api/board?cat=${encodeURIComponent(cat || 'all')}&tf=${encodeURIComponent(tf)}`;
+      url = `/api/board?cat=${encodeURIComponent(cat || 'all')}&tf=${encodeURIComponent(tf)}${langQ}`;
     } else if (kind === 'inst') {
-      url = `/api/chart?slug=${encodeURIComponent(board.dataset.slug || '')}&tf=${encodeURIComponent(tf)}`;
+      url = `/api/chart?slug=${encodeURIComponent(board.dataset.slug || '')}&tf=${encodeURIComponent(tf)}${langQ}`;
     } else {
       url = `/api/chart?market=${encodeURIComponent(board.dataset.market || '')}&symbol=${encodeURIComponent(
         board.dataset.symbol || ''
-      )}&tf=${encodeURIComponent(tf)}`;
+      )}&tf=${encodeURIComponent(tf)}${langQ}`;
     }
     const r = await fetch(url, { headers: { Accept: 'application/json' } });
     if (!r.ok) throw new Error(CT('не удалось получить ряд'));
@@ -493,6 +497,99 @@
     else u.searchParams.set('tf', tf);
     switchBoard(board, null, { tf, cat, href: u.href }, false);
   });
+
+  // ------------------------------ живые котировки
+  // Сервер опрашивает биржи сам и держит цены в памяти; здесь только забираем
+  // готовое и подставляем. Числа приходят уже отформатированными — правила
+  // разные (у индекса два знака, у крипты восемь, у рубля знак ₽), и вторая их
+  // копия в браузере разошлась бы с первой. Каждый элемент с data-rt-f говорит,
+  // какое поле ему нужно: «i» — значение индекса, «p» — процент, «m» — цена
+  // бумаги, «v:usd» — цена в единицах инструмента
+  const rt = (() => {
+    // Поле ищет свой ключ у ближайшего предка с data-rt. Не у «корня страницы»:
+    // карточка «Графиков» перерисовывается через /api/charts, внешний <a>
+    // вместе с ключом исчезает, и после первого же обновления поля остались бы
+    // без адреса. Ключ на самом поле это переживает
+    const fields = () => [...document.querySelectorAll('[data-rt-f]')];
+    const keyOf = (el) => el.closest('[data-rt]')?.dataset.rt || null;
+
+    // Направление — свойство величины, а не текста, поэтому класс ставим по
+    // ответу сервера: «−1,04%» и «+0,00%» различаются знаком, а «0» не растёт
+    const DIRS = ['up', 'down', 'flat'];
+    const paint = (quotes) => {
+      for (const el of fields()) {
+        const key = keyOf(el);
+        if (!key) continue;
+        const q = quotes[key];
+        if (!q) continue;
+        const tok = el.dataset.rtF;
+        if (q[tok] === undefined || q[tok] === null) continue;
+        if (el.textContent !== q[tok]) el.textContent = q[tok];
+        if (tok === 'p' || tok === 'd' || tok.startsWith('c:')) {
+          el.classList.remove(...DIRS);
+          el.classList.add(q.dir || 'flat');
+        }
+      }
+    };
+
+    let timer = null;
+    let busy = false;
+    let every = 5000;
+
+    const tick = async () => {
+      if (busy || document.hidden) return;
+      const keys = new Set();
+      const tokens = new Set();
+      for (const el of fields()) {
+        const key = keyOf(el);
+        if (!key) continue;
+        keys.add(key);
+        tokens.add(el.dataset.rtF);
+      }
+      if (!keys.size || !tokens.size) return;
+      busy = true;
+      try {
+        const r = await fetch(
+          `/api/quotes?keys=${encodeURIComponent([...keys].join(','))}&f=${encodeURIComponent([...tokens].join(','))}&lang=${encodeURIComponent(LANG)}`,
+          { headers: { Accept: 'application/json' } }
+        );
+        if (!r.ok) return;
+        const data = await r.json();
+        // Период задаёт сервер: он же знает, как часто обновляется источник, и
+        // уменьшать интервал придётся в одном месте, а не в двух
+        if (data.poll > 0 && data.poll !== every) {
+          every = data.poll;
+          restart();
+        }
+        paint(data.quotes || {});
+      } catch {
+        // Сеть отвалилась — на экране остаются последние цены, а не прочерки
+      } finally {
+        busy = false;
+      }
+    };
+
+    const restart = () => {
+      if (timer) clearInterval(timer);
+      timer = setInterval(tick, every);
+    };
+
+    return {
+      start(ms) {
+        // Ноль означает «реалтайм выключен»: опрашивать нечего, и молчащий
+        // таймер каждые пять секунд — это трафик без пользы
+        if (!ms) return;
+        every = ms;
+        restart();
+        tick();
+        document.addEventListener('visibilitychange', () => {
+          if (!document.hidden) tick();
+        });
+        window.addEventListener('pagehide', () => timer && clearInterval(timer));
+      },
+    };
+  })();
+  if (document.querySelector('[data-rt]')) rt.start(Number(document.body.dataset.quoteMs || 0));
 
   // Меню языка — <details>, и сам по себе он закрывается только повторным
   // кликом по коду. Клик мимо и Esc должны его отпускать: раскрытый список

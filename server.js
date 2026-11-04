@@ -13,6 +13,7 @@ import { createIndexCrawler } from './lib/index-crawler.js';
 import { createChartStore, TIMEFRAMES } from './lib/charts.js';
 import { createChartCrawler } from './lib/chart-crawler.js';
 import { createChartSeries } from './lib/chart-intraday.js';
+import { createRealtime } from './lib/realtime.js';
 import {
   TRANS_LANG,
   TRANSLATION_SCHEMA,
@@ -20,13 +21,35 @@ import {
   buildTranslatePrompt,
   applyTranslation,
 } from './lib/summary-translate.js';
-import { createMarketFeed, isCtf, isCat, DEFAULT_CTF, CTF, CATS, INSTRUMENTS, instrumentBySlug, instrumentPath } from './lib/markets.js';
-import { chartsPage, chartsBoard, chartsMeta, instrumentPage, instChartInner, cardInnerHtml, pollFor } from './lib/market-render.js';
-import { chartBlock, tfList, DEFAULT_TF } from './lib/chart-render.js';
-import { indexPage, indicesPage, homeIndices } from './lib/index-render.js';
+import {
+  createMarketFeed,
+  isCtf,
+  isCat,
+  DEFAULT_CTF,
+  CTF,
+  CATS,
+  INSTRUMENTS,
+  instrumentBySlug,
+  instrumentPath,
+  fmtValue,
+  fmtChange,
+} from './lib/markets.js';
+import {
+  chartsPage,
+  chartsBoard,
+  chartsMeta,
+  instrumentPage,
+  instChartInner,
+  cardInnerHtml,
+  pollFor,
+  unitToken,
+} from './lib/market-render.js';
+import { chartBlock, tfList, DEFAULT_TF, fmtPrice } from './lib/chart-render.js';
+import { indexPage, indicesPage, homeIndices, val as idxVal, signed as idxSigned, pct as idxPct } from './lib/index-render.js';
 import { homeRank, isTab, HOME_TABS } from './lib/home-rank.js';
 import {
   SITE_NAME,
+  setQuoteMs,
   MARKET_LABEL,
   MARKET_SLUG,
   SLUG_MARKET,
@@ -43,6 +66,7 @@ import {
 } from './lib/render.js';
 import {
   langFromPath,
+  isLang,
   withLang,
   getLang,
   href as langHref,
@@ -1320,6 +1344,19 @@ const chartSeries = createChartSeries({ store: chartStore, log });
 // поэтому кеш живёт в памяти и отдельного крона не требует
 const marketFeed = createMarketFeed({ log });
 
+// Реалтайм-котировки: цена и изменение за день каждые несколько секунд.
+// Своего файла нет намеренно — значение, записанное на диск, к следующему
+// чтению уже устарело. Опрос идёт на сервере, потому что источник отдаёт весь
+// рынок одним пакетом: браузеру остаётся один запрос к нам за всеми ценами
+const realtime = createRealtime({
+  // Своя переменная, а не CRAWLER_ENABLED: опрос котировок к новостному крону
+  // отношения не имеет, и выключение крона в тестовой копии не должно гасить
+  // цены — иначе проверять реалтайм не на чем
+  enabled: process.env.REALTIME_ENABLED !== '0',
+  intervalMs: (Number(process.env.REALTIME_SEC) || 5) * 1000,
+  log,
+});
+
 const crawler = createCrawler({
   cfg: CRAWLER,
   log,
@@ -1381,6 +1418,17 @@ const dividendFor = (asset) => dividendStore.get(`${asset.market}:${asset.symbol
 // иначе поисковик увидит десятки копий, отличающихся только графиком.
 // Внутридневной ряд берётся по сети, поэтому функция асинхронная; день, неделя
 // и месяц собираются из файла и сети не требуют вовсе
+// Живой процент поверх котировки карточки «Графиков». Цена и там приходит
+// сетью, но изменение у Мосбиржи считается к предыдущей сделке, а не к
+// вчерашнему закрытию — на карточке это выглядело как «0.00%» при −0,19%.
+// Ключ ищем по биржевому символу через sourceCode, как и в разметке карточки
+function liveForInstrument(inst, quote) {
+  const idx = INDEXES.find((i) => i.sourceCode === inst.code);
+  const live = idx ? realtime.get(`IDX:${idx.code}`) : null;
+  if (!live) return quote;
+  return { ...(quote || {}), price: live.price, pct: live.pct, prev: live.prev ?? quote?.prev ?? null };
+}
+
 async function chartHtmlFor(asset, { tf: tfParam = '' } = {}) {
   const tf = tfList(asset.market).includes(String(tfParam || '')) ? String(tfParam) : DEFAULT_TF;
   const rec = chartStore.get(`${asset.market}:${asset.symbol}`);
@@ -1391,6 +1439,9 @@ async function chartHtmlFor(asset, { tf: tfParam = '' } = {}) {
       rec,
       series,
       tf,
+      // Живая цена на странице тикера: тот же ключ, что у сводки и таблицы
+      // капитализации — страница ищет цену по нему же
+      live: realtime.quoteOf(asset.market, asset.symbol),
       // Ссылки относительные: страница должна работать и на тестовой копии
       // с чужим портом, где абсолютный адрес увёл бы на прод
       canonicalPath: tickerPath(asset),
@@ -1501,6 +1552,26 @@ function sendJson(res, status, body) {
 // координат, которые жмутся в десять раз: 470 КБ на вкладку индексов против 50
 // после gzip. Caddy здесь ничего не сжимает, а гонять полмегабайта каждые
 // полминуты на каждого посетителя нельзя, поэтому gzip делается на месте
+// Текст одного поля котировки. Форматирование живёт здесь, а не в браузере:
+// правила у всех разные — у индекса до двух знаков, у крипты до восьми, у
+// рубля знак ₽, у доллара $, — и вторая их копия на клиенте разошлась бы с
+// первой при первой же правке. Скрипт только подставляет готовую строку
+function quoteText(live, token, key) {
+  const market = String(key).split(':')[0];
+  // Абсолютное изменение у индексов приходит готовым, у бумаг — разницей с
+  // предыдущим закрытием; общего поля «change» в потоке нет
+  const abs = Number.isFinite(Number(live.abs)) ? Number(live.abs) : live.prev ? live.price - live.prev : null;
+  if (token === 'i') return key.startsWith('IDX:') ? idxVal(live.price) : null;
+  if (token === 'd') return key.startsWith('IDX:') ? `${idxSigned(abs)} (${idxPct(live.pct)})` : null;
+  if (token === 'p') return idxPct(live.pct);
+  if (token === 'm') return fmtPrice(live.price, market === 'RU' ? 'RUB' : 'USD');
+  const [kind, unit] = String(token).split(':');
+  if (!unit) return null;
+  if (kind === 'v') return fmtValue(live.price, { unit });
+  if (kind === 'c') return fmtChange({ pct: live.pct, price: live.price, prev: live.prev }, { unit }).text;
+  return null;
+}
+
 function sendJsonGzip(req, res, status, body) {
   const raw = Buffer.from(JSON.stringify(body), 'utf8');
   const accepts = String(req.headers['accept-encoding'] || '').includes('gzip');
@@ -1691,6 +1762,7 @@ const handleRequest = async (req, res, url) => {
         dividends: dividendCrawler.status(),
         indices: indexCrawler.status(),
         charts: chartCrawler.status(),
+        realtime: realtime.status(),
       });
     }
 
@@ -1970,6 +2042,9 @@ ${[...new Set(paths)].map(entry).join('\n')}
       // страница не должна отдавать 404 из-за параметра, набранного руками
       const tf = isCtf(tfRaw) ? tfRaw : DEFAULT_CTF;
       const { rows, quotes } = await marketFeed.board(cat, tf);
+      // Котировки индексов заменяются живыми: иначе карточка считает
+      // процент по полю Мосбиржи «к предыдущей сделке»
+      for (const r of rows) quotes[r.inst.key] = liveForInstrument(r.inst, quotes[r.inst.key]);
       const out = chartsPage({ cat, tf, rows, quotes, siteName: SITE_NAME });
       return sendHtml(
         res,
@@ -1999,7 +2074,8 @@ ${[...new Set(paths)].map(entry).join('\n')}
       const tfRaw = String(url.searchParams.get('tf') || DEFAULT_CTF);
       const tf = isCtf(tfRaw) ? tfRaw : DEFAULT_CTF;
       const { series, quote } = await marketFeed.one(inst, tf);
-      const out = instrumentPage({ inst, series, quote, tf, siteUrl: SITE_URL, siteName: SITE_NAME });
+      const liveQuote = liveForInstrument(inst, quote);
+      const out = instrumentPage({ inst, series, quote: liveQuote, tf, siteUrl: SITE_URL, siteName: SITE_NAME });
       return sendHtml(
         res,
         page({
@@ -2024,6 +2100,9 @@ ${[...new Set(paths)].map(entry).join('\n')}
       const tfRaw = String(url.searchParams.get('tf') || DEFAULT_CTF);
       const tf = isCtf(tfRaw) ? tfRaw : DEFAULT_CTF;
       const { rows, quotes } = await marketFeed.board(cat, tf);
+      // Котировки индексов заменяются живыми: иначе карточка считает
+      // процент по полю Мосбиржи «к предыдущей сделке»
+      for (const r of rows) quotes[r.inst.key] = liveForInstrument(r.inst, quotes[r.inst.key]);
       const out = chartsMeta({ cat, tf });
       return sendJsonGzip(req, res, 200, {
         at: new Date().toISOString(),
@@ -2053,7 +2132,7 @@ ${[...new Set(paths)].map(entry).join('\n')}
           // h1 страницы тоже называет интервал — без него заголовок разошёлся
           // бы с тем, что нарисовано под ним
           h1: t('{name}: {tf} график, цена и история', { name: t(inst.name), tf: t(CTF[tf].one) }),
-          html: instChartInner({ inst, series, quote, tf }),
+          html: instChartInner({ inst, series, quote: liveForInstrument(inst, quote), tf }),
         });
       }
       const market = SLUG_MARKET[String(url.searchParams.get('market') || '').toLowerCase()];
@@ -2066,13 +2145,57 @@ ${[...new Set(paths)].map(entry).join('\n')}
       return sendJsonGzip(req, res, 200, { tf: tfRaw, html });
     }
 
-    // Обновление карточек: отдаём готовую разметку, а не данные, — так подпись,
-    // форматирование и разметка остаются в одном месте, на сервере
+    // Живые котировки для уже открытой страницы. Отдаём готовые строки, а не
+    // числа: форматирование у каждого рынка своё, и на клиенте оно разошлось
+    // бы с серверным при первой же правке. Скрипт только подставляет текст
+    if (url.pathname === '/api/quotes') {
+      const want = [
+        ...new Set(
+          String(url.searchParams.get('keys') || '')
+            .split(',')
+            .map((x) => x.trim())
+            .filter(Boolean)
+        ),
+      ].slice(0, 400);
+      // Поля, которые просит страница: «i» — значение индекса, «d» — его
+      // изменение, «p» — процент, «m» — цена бумаги в её валюте, «v:usd» и
+      // «c:usd» — цена и изменение в единицах инструмента. Список, а не
+      // набор, потому что одна и та же величина печатается по-разному: на
+      // странице индекса «2 442,1», в карточке «2 442,10 п.»
+      const tokens = [
+        ...new Set(
+          String(url.searchParams.get('f') || '')
+            .split(',')
+            .map((x) => x.trim())
+            .filter(Boolean)
+        ),
+      ].slice(0, 8);
+      const quotes = {};
+      for (const k of want) {
+        const live = realtime.get(k);
+        if (!live) continue;
+        const out = { at: live.at };
+        // Направление считает сервер: класс на элементе — тоже часть
+        // оформления, и страница не должна выводить его из строки
+        const v = Number(live.pct);
+        out.dir = Number.isFinite(v) ? (v > 0 ? 'up' : v < 0 ? 'down' : 'flat') : 'flat';
+        for (const tok of tokens) {
+          const text = quoteText(live, tok, k);
+          if (text !== null) out[tok] = text;
+        }
+        quotes[k] = out;
+      }
+      return sendJsonGzip(req, res, 200, { at: realtime.at(), poll: realtime.intervalMs(), quotes });
+    }
+
     if (url.pathname === '/api/charts') {
       const cat = isCat(String(url.searchParams.get('cat') || '')) ? String(url.searchParams.get('cat')) : 'all';
       const tfRaw = String(url.searchParams.get('tf') || DEFAULT_CTF);
       const tf = isCtf(tfRaw) ? tfRaw : DEFAULT_CTF;
       const { rows, quotes } = await marketFeed.board(cat, tf);
+      // Котировки индексов заменяются живыми: иначе карточка считает
+      // процент по полю Мосбиржи «к предыдущей сделке»
+      for (const r of rows) quotes[r.inst.key] = liveForInstrument(r.inst, quotes[r.inst.key]);
       const cards = rows.map((r) => ({
         key: r.inst.key,
         html: cardInnerHtml({ inst: r.inst, series: r.series, quote: quotes[r.inst.key], tf }),
@@ -2089,7 +2212,7 @@ ${[...new Set(paths)].map(entry).join('\n')}
       if (!indexCrawler.status().stored) {
         return sendHtml(res, notFoundPage({ siteUrl: SITE_URL, siteName: SITE_NAME }), { status: 404, cache: 'no-store' });
       }
-      return sendHtml(res, indicesPage({ quotes: indexStore.all(), history: indexStore.allHistory(), siteUrl: SITE_URL, siteName: SITE_NAME }), {
+      return sendHtml(res, indicesPage({ quotes: realtime.overlayAll(indexStore.all()), history: indexStore.allHistory(), siteUrl: SITE_URL, siteName: SITE_NAME }), {
         cache: 'public, max-age=120',
       });
     }
@@ -2103,7 +2226,9 @@ ${[...new Set(paths)].map(entry).join('\n')}
         res,
         indexPage({
           idx,
-          quote: indexStore.quote(idx.code),
+          // Живая цена поверх сохранённой: файл обновляется раз в пять минут,
+          // а страница обещает сегодняшнее значение
+          quote: realtime.overlay(idx.code, indexStore.quote(idx.code)),
           history: indexStore.history(idx.code),
           composition: indexStore.composition(idx.code),
           knownSymbols: knownSymbols(),
@@ -2490,8 +2615,11 @@ ${[...new Set(paths)].map(entry).join('\n')}
             charts: chartStore.all(),
             usdRate: currentUniverse()?.usdRate ?? null,
             tab,
+            // Первая отрисовка сразу с живыми ценами: иначе таблица показывает
+            // вчерашнее закрытие и через пять секунд прыгает на сегодняшнее
+            live: realtime.all(),
           }),
-          indicesHtml: homeIndices({ quotes: indexStore.all(), siteUrl: SITE_URL }),
+          indicesHtml: homeIndices({ quotes: realtime.overlayAll(indexStore.all()), siteUrl: SITE_URL }),
         })
       );
     }
@@ -2527,10 +2655,16 @@ ${[...new Set(paths)].map(entry).join('\n')}
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
-  const { lang, path } = langFromPath(url.pathname);
+  const { lang: pathLang, path } = langFromPath(url.pathname);
   // Служебные адреса и статика существуют в одном экземпляре на весь сайт:
   // /api, /app.css, /robots.txt не переводятся и префикса не имеют
   const isService = /^\/api\//.test(url.pathname) || /\.[a-z0-9]+$/i.test(url.pathname);
+  // Но содержимое служебного ответа всё-таки языковое: /api/board отдаёт
+  // заголовок вкладки и разметку с подписями, /api/quotes — отформатированные
+  // числа. Префикса у адреса нет, поэтому язык приходит параметром, а без
+  // него — русский, как и раньше
+  const qLang = String(url.searchParams.get('lang') || '');
+  const lang = isService && isLang(qLang) ? qLang : pathLang;
   // Один канонический вид адреса на страницу. Расходится он по двум причинам:
   // языкового префикса нет (русский раньше жил без него) или в конце стоит
   // лишний слэш. И то и другое даёт вторую копию страницы с чужим canonical,
@@ -2569,4 +2703,14 @@ server.listen(PORT, HOST, () => {
   indexCrawler.start();
   chartCrawler.start();
   spendTracker.start();
+  // Котировкам нужны вселенная (что опрашивать), дневной файл графиков (какой
+  // парой торгуется монета и опорное закрытие) и история индексов (закрытие
+  // прошлого дня). Всё это крон дописывает уже после старта, поэтому
+  // передаётся функция, а не снимок
+  realtime.start({
+    inputs: () => ({ universe: currentUniverse(), charts: chartStore.all(), indices: indexStore.allHistory() }),
+  });
+  // Страница узнаёт период опроса из своей же разметки: так выключенный
+  // реалтайм гасит и клиентский таймер, и запросы к /api/quotes
+  setQuoteMs(process.env.REALTIME_ENABLED === '0' ? 0 : realtime.intervalMs());
 });

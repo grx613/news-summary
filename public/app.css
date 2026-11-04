@@ -268,6 +268,10 @@ details.cat > summary:hover h2 { color: var(--accent); }
 .idx-value { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 6px; }
 .idx-num { font-size: 40px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -.5px; }
 .idx-num span { font-size: 17px; font-weight: 400; color: var(--muted); margin-left: 6px; }
+/* Само значение — тоже span (его подменяет живая котировка), но крупное.
+   Без этого правила оно попадало под селектор выше и печаталось серым
+   семнадцатым кеглем рядом с единицей измерения */
+.idx-num span.n { font-size: inherit; font-weight: inherit; color: inherit; margin-left: 0; letter-spacing: inherit; }
 .idx-delta { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--muted); }
 .idx-delta.up, .idx-table .up { color: var(--green); }
 .idx-delta.down, .idx-table .down { color: var(--red); }
