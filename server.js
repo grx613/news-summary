@@ -2297,6 +2297,20 @@ ${[...new Set(paths)].map(entry).join('\n')}
           return sendHtml(res, forumNotFound({ siteUrl: SITE_URL }), { status: 404, cache: 'no-store' });
         }
 
+        // Тема написана на языке автора и перевода не имеет: /en/ того же
+        // адреса — копия с самоссылающимся canonical. Ведём на настоящий адрес,
+        // тот, что объявлен в hreflang. Ответ на сообщение и просмотр не
+        // теряются: и ?to=, и ?view= переезжают вместе с адресом
+        const thLang = thread.lang || 'ru';
+        if (thLang !== getLang()) {
+          const keep = ['to', 'view']
+            .map((k) => (url.searchParams.get(k) ? `${k}=${encodeURIComponent(url.searchParams.get(k))}` : ''))
+            .filter(Boolean)
+            .join('&');
+          res.writeHead(301, { Location: langHref(thLang, threadPath(thread)) + (keep ? `?${keep}` : '') });
+          return res.end();
+        }
+
         if (parts[6] === 'reply') {
           if (req.method !== 'POST') return redirect(res, threadPath(thread) + '#reply');
           if (!user.me) return redirect(res, `/forum/login?next=${encodeURIComponent(threadPath(thread))}`);
@@ -2519,8 +2533,12 @@ const server = http.createServer((req, res) => {
   const isService = /^\/api\//.test(url.pathname) || /\.[a-z0-9]+$/i.test(url.pathname);
   if (!isService) url.pathname = path;
   // Путь для переключателя языка — снятый: с него строятся ссылки на ту же
-  // страницу в других языках, и префикс не должен накапливаться
-  return withLang(lang, () => handleRequest(req, res, url), path);
+  // страницу в других языках, и префикс не должен накапливаться. Параметры
+  // адреса переезжают вместе с ним: /?tab=us и /charts/gold?tf=1h — это разные
+  // страницы, и переключатель должен вести на ту же, а не на её вариант по
+  // умолчанию. Значения уже закодированы в строке запроса, повторно не трогаем
+  const qs = url.searchParams.toString();
+  return withLang(lang, () => handleRequest(req, res, url), qs ? `${path}?${qs}` : path);
 });
 
 server.listen(PORT, HOST, () => {

@@ -5,7 +5,8 @@
 * { box-sizing: border-box; }
 body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.55; }
 a { color: var(--accent); }
-.wrap { max-width: 980px; margin: 0 auto; padding: 40px 20px 80px; }
+/* position: relative — точка отсчёта для переключателя языка в углу */
+.wrap { max-width: 980px; margin: 0 auto; padding: 40px 20px 80px; position: relative; }
 h1 { margin: 0 0 6px; font-size: 27px; }
 h1 a { color: var(--text); text-decoration: none; }
 /* Логотип отделён от h1: h1 на каждой странице свой и содержит её тему */
@@ -105,6 +106,20 @@ details.cat > summary:hover h2 { color: var(--accent); }
 .tl .s { font-weight: 700; font-variant-numeric: tabular-nums; min-width: 62px; color: var(--accent); }
 .tl .n { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tl:hover .n { color: var(--text); }
+/* Переключатель языка: в углу шапки, свёрнут в двухбуквенный код.
+   Абсолютное позиционирование, а не float: он не должен сдвигать меню и
+   заголовок, которые на разных страницах начинаются по-разному */
+.lang-dd { position: absolute; top: 40px; right: 20px; z-index: 30; font-size: 13px; }
+.lang-dd > summary { list-style: none; display: inline-block; cursor: pointer; padding: 5px 11px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--muted); font-weight: 600; letter-spacing: .5px; user-select: none; }
+.lang-dd > summary::-webkit-details-marker { display: none; }
+.lang-dd > summary::after { content: '▾'; margin-left: 6px; font-size: 10px; }
+.lang-dd[open] > summary, .lang-dd > summary:hover { color: var(--text); border-color: var(--accent); }
+.lang-menu { list-style: none; margin: 6px 0 0; padding: 5px; position: absolute; right: 0; min-width: 148px; background: var(--card); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 12px 32px rgba(0,0,0,.45); }
+.lang-menu a { display: block; padding: 7px 12px; border-radius: 7px; color: var(--text); text-decoration: none; white-space: nowrap; }
+.lang-menu a:hover { background: #1f2630; }
+/* Свой язык не ссылка на себя, но и не исчезает: видно, где ты */
+.lang-menu a.on { color: var(--muted); cursor: default; }
+.lang-menu a.on::after { content: ' ✓'; color: var(--accent); }
 .nav { margin: 0 0 22px; font-size: 14px; }
 .nav a { margin-right: 16px; }
 /* Текущий раздел не выглядит ссылкой, но и не исчезает: человек видит, где он */
