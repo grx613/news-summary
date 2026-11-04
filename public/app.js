@@ -5,7 +5,53 @@
     String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
   const SLUG = { RU: 'ru', US: 'us', CRYPTO: 'crypto' };
-  const tickerUrl = (type, symbol) => `/ticker/${SLUG[type] || 'us'}/${encodeURIComponent(symbol)}`;
+
+  // Язык берём у самой страницы: сервер уже проставил <html lang>, и второй
+  // настройки на клиенте не нужно. Ключи — те же русские строки, что в словарях
+  // сервера; нет перевода — остаётся русская строка, а не пустое место
+  const LANG = document.documentElement.lang || 'ru';
+  const CLIENT_DICT = {
+    en: {
+      'Ничего не найдено. Попробуйте тикер: GAZP, AAPL, BTC.': 'Nothing found. Try a ticker: GAZP, AAPL, BTC.',
+      'Собрать': 'Generate',
+      'Обновить': 'Refresh',
+      '↻ через {t}': '↻ in {t}',
+      'Данные обновляли недавно — повторное обновление недоступно': 'The data was refreshed recently, a second refresh is not available',
+      '↻ обновляем…': '↻ refreshing…',
+      'Собираем публикации и готовим сводку — 10–30 секунд.': 'Collecting publications and preparing the summary, 10–30 seconds.',
+      'Обновление недоступно': 'Refresh is not available',
+      'Готовим ответ…': 'Preparing the answer…',
+      'Скопировано': 'Copied',
+      'Выделено — скопируйте вручную': 'Selected — copy it manually',
+      'не удалось получить ряд': 'could not get the series',
+      'Отправляем…': 'Sending…',
+    },
+    es: {
+      'Ничего не найдено. Попробуйте тикер: GAZP, AAPL, BTC.': 'No se encontró nada. Prueba con un ticker: GAZP, AAPL, BTC.',
+      'Собрать': 'Generar',
+      'Обновить': 'Actualizar',
+      '↻ через {t}': '↻ en {t}',
+      'Данные обновляли недавно — повторное обновление недоступно': 'Los datos se actualizaron hace poco; no se puede repetir',
+      '↻ обновляем…': '↻ actualizando…',
+      'Собираем публикации и готовим сводку — 10–30 секунд.': 'Recopilando publicaciones y preparando el resumen: 10–30 segundos.',
+      'Обновление недоступно': 'La actualización no está disponible',
+      'Готовим ответ…': 'Preparando la respuesta…',
+      'Скопировано': 'Copiado',
+      'Выделено — скопируйте вручную': 'Seleccionado: cópialo a mano',
+      'не удалось получить ряд': 'no se pudo obtener la serie',
+      'Отправляем…': 'Enviando…',
+    },
+  };
+  const CT = (k, vars) => {
+    const s = (CLIENT_DICT[LANG] && CLIENT_DICT[LANG][k]) || k;
+    return vars ? String(s).replace(/\{(\w+)\}/g, (m, n) => (vars[n] === undefined ? m : String(vars[n]))) : s;
+  };
+
+  // Префикс языка в ссылке: подсказка поиска ведёт на страницу тикера, и на
+  // /en/ она должна остаться в английской версии
+  const langPrefix = LANG === 'ru' ? '' : `/${LANG}`;
+  const tickerUrl = (type, symbol) =>
+    `${langPrefix}/ticker/${SLUG[type] || 'us'}/${encodeURIComponent(symbol)}`;
 
   // ---------------------------------------------------------- поиск на главной
   const $q = document.getElementById('q');
@@ -24,7 +70,7 @@
 
     const renderDd = () => {
       if (!results.length) {
-        $dd.innerHTML = '<div class="hint">Ничего не найдено. Попробуйте тикер: GAZP, AAPL, BTC.</div>';
+        $dd.innerHTML = `<div class="hint">${esc(CT('Ничего не найдено. Попробуйте тикер: GAZP, AAPL, BTC.'))}</div>`;
       } else {
         $dd.innerHTML = results
           .map(
@@ -111,15 +157,15 @@
       if (left <= 0) {
         clearInterval(timer);
         btn.disabled = false;
-        btn.textContent = '↻ ' + (btn.dataset.generate ? 'Собрать' : 'Обновить');
+        btn.textContent = '↻ ' + (btn.dataset.generate ? CT('Собрать') : CT('Обновить'));
         btn.title = '';
         return;
       }
       btn.disabled = true;
       const mm = Math.floor(left / 60000);
       const ss = Math.floor((left % 60000) / 1000);
-      btn.textContent = `↻ через ${mm}:${String(ss).padStart(2, '0')}`;
-      btn.title = 'Данные обновляли недавно — повторное обновление недоступно';
+      btn.textContent = CT('↻ через {t}', { t: `${mm}:${String(ss).padStart(2, '0')}` });
+      btn.title = CT('Данные обновляли недавно — повторное обновление недоступно');
     };
 
     paint();
@@ -127,8 +173,8 @@
 
     btn.addEventListener('click', async () => {
       btn.disabled = true;
-      btn.textContent = '↻ обновляем…';
-      if (flash) flash.innerHTML = '<div class="notice">Собираем публикации и готовим сводку — 10–30 секунд.</div>';
+      btn.textContent = CT('↻ обновляем…');
+      if (flash) flash.innerHTML = `<div class="notice">${esc(CT('Собираем публикации и готовим сводку — 10–30 секунд.'))}</div>`;
       try {
         const p = new URLSearchParams({ symbol, market, refresh: '1' });
         const res = await fetch('/api/summary?' + p);
@@ -136,13 +182,13 @@
         // 429 с готовыми данными — кулдаун: страница всё равно актуальна, просто ждём
         if (!res.ok && !data.summary && !data.asset) throw new Error(data.error || `HTTP ${res.status}`);
         if (res.ok) return location.reload();
-        if (flash) flash.innerHTML = `<div class="notice">${esc(data.error || 'Обновление недоступно')}</div>`;
+        if (flash) flash.innerHTML = `<div class="notice">${esc(data.error || CT('Обновление недоступно'))}</div>`;
         until = data.nextRefreshAt ? new Date(data.nextRefreshAt).getTime() : until;
         paint();
       } catch (e) {
         if (flash) flash.innerHTML = `<div class="err">⚠️ ${esc(e.message)}</div>`;
         btn.disabled = false;
-        btn.textContent = '↻ Обновить';
+        btn.textContent = '↻ ' + CT('Обновить');
       }
     });
   }
@@ -163,7 +209,7 @@
     $qForm.addEventListener('submit', () => {
       if ($btn) {
         $btn.disabled = true;
-        $btn.textContent = 'Готовим ответ…';
+        $btn.textContent = CT('Готовим ответ…');
       }
     });
   }
@@ -192,14 +238,14 @@
       const text = el.textContent.trim();
       try {
         await navigator.clipboard.writeText(text);
-        btn.textContent = 'Скопировано';
+        btn.textContent = CT('Скопировано');
       } catch {
         const r = document.createRange();
         r.selectNodeContents(el);
         const sel = window.getSelection();
         sel.removeAllRanges();
         sel.addRange(r);
-        btn.textContent = 'Выделено — скопируйте вручную';
+        btn.textContent = CT('Выделено — скопируйте вручную');
       }
     });
   });
@@ -314,7 +360,7 @@
       )}&tf=${encodeURIComponent(tf)}`;
     }
     const r = await fetch(url, { headers: { Accept: 'application/json' } });
-    if (!r.ok) throw new Error('не удалось получить ряд');
+    if (!r.ok) throw new Error(CT('не удалось получить ряд'));
     return r.json();
   };
 
@@ -453,7 +499,7 @@
       const b = f.querySelector('button[type="submit"]');
       if (b) {
         b.disabled = true;
-        b.textContent = 'Отправляем…';
+        b.textContent = CT('Отправляем…');
       }
     });
   });

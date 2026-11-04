@@ -25,6 +25,7 @@ import {
   SLUG_MARKET,
   tickerPath,
   questionPath,
+  niceName,
   homePage,
   catalogPage,
   tickerPage,
@@ -33,7 +34,17 @@ import {
   notFoundPage,
   page,
 } from './lib/render.js';
-import { langFromPath, withLang, getLang, href as langHref, LANGS, DEFAULT_LANG, defineDict } from './lib/i18n.js';
+import {
+  langFromPath,
+  withLang,
+  getLang,
+  href as langHref,
+  alternates,
+  t,
+  LANGS,
+  DEFAULT_LANG,
+  defineDict,
+} from './lib/i18n.js';
 import {
   QA_SCHEMA,
   createQuestionStore,
@@ -805,13 +816,13 @@ async function summarize(a, news) {
     last = out;
     console.warn(`саммари ${a.market}:${a.symbol}: попытка ${attempt + 1} вернула невалидный ответ`);
   }
-  throw Object.assign(new Error('Модель вернула некорректный ответ, попробуйте позже'), { status: 502 });
+  throw Object.assign(new Error(t('Модель вернула некорректный ответ, попробуйте позже')), { status: 502 });
 }
 
 async function buildSummary(a) {
   const { items, used, failed } = await collectNews(a);
   if (!items.length) {
-    throw Object.assign(new Error('Свежих публикаций по этому тикеру не нашлось'), { status: 404 });
+    throw Object.assign(new Error(t('Свежих публикаций по этому тикеру не нашлось')), { status: 404 });
   }
   const summary = await summarize(a, items);
   // Расход считаем по факту генерации, а не по содержимому кеша: записи из старых версий его не хранят
@@ -1112,7 +1123,7 @@ async function answerQuestion(asset, rec, question) {
     } catch (e) {
       log(`вопрос ${key}: поиск не удался (${e.message}), откат на кеш`);
       if (!QA_FALLBACK_TO_CACHE) {
-        throw Object.assign(new Error('Поиск сейчас недоступен. Попробуйте через несколько минут.'), { status: 502 });
+        throw Object.assign(new Error(t('Поиск сейчас недоступен. Попробуйте через несколько минут.')), { status: 502 });
       }
     }
   }
@@ -1120,7 +1131,7 @@ async function answerQuestion(asset, rec, question) {
   const res = await answerFromCache(asset, rec, question);
   if (res.verdict !== 'ok') return res;
   if (res.answer.length < 40) {
-    throw Object.assign(new Error('Модель не смогла ответить на вопрос. Попробуйте переформулировать.'), {
+    throw Object.assign(new Error(t('Модель не смогла ответить на вопрос. Попробуйте переформулировать.')), {
       status: 502,
     });
   }
@@ -1450,7 +1461,7 @@ function readBody(req, limit) {
     req.on('data', (c) => {
       size += c.length;
       if (size > limit) {
-        reject(Object.assign(new Error('Слишком большой запрос'), { status: 413 }));
+        reject(Object.assign(new Error(t('Слишком большой запрос')), { status: 413 }));
         req.destroy();
         return;
       }
@@ -1485,13 +1496,13 @@ const handleRequest = async (req, res, url) => {
       const q = (url.searchParams.get('q') || '').trim();
       if (!q) return sendJson(res, 200, []);
       const wait = ipBucket(ip, 'search', 60_000, MAX_SEARCH_PER_IP_MIN);
-      if (wait) return sendJson(res, 429, { error: 'Слишком много запросов поиска. Подождите минуту.' });
+      if (wait) return sendJson(res, 429, { error: t('Слишком много запросов поиска. Подождите минуту.') });
       return sendJson(res, 200, await searchTickers(q));
     }
 
     if (url.pathname === '/api/summary') {
       const symbol = (url.searchParams.get('symbol') || '').trim();
-      if (!symbol) return sendJson(res, 400, { error: 'Параметр symbol обязателен' });
+      if (!symbol) return sendJson(res, 400, { error: t('Параметр symbol обязателен') });
       const asset = await resolveAsset({
         symbol,
         name: (url.searchParams.get('name') || '').trim(),
@@ -1509,7 +1520,10 @@ const handleRequest = async (req, res, url) => {
           const left = cooldownLeft(hit);
           if (left > 0) {
             return sendJson(res, 429, {
-              error: `Данные по ${asset.symbol} обновляли недавно. Следующее обновление через ${Math.ceil(left / 60000)} мин.`,
+              error: t('Данные по {symbol} обновляли недавно. Следующее обновление через {min} мин.', {
+                symbol: asset.symbol,
+                min: Math.ceil(left / 60000),
+              }),
               retryAfterSec: Math.ceil(left / 1000),
               ...(hit ? hit : {}),
               ...(hit ? meta(hit, true) : {}),
@@ -1521,13 +1535,16 @@ const handleRequest = async (req, res, url) => {
         const ipWait = ipBucket(ip, 'gen', 3600_000, MAX_GEN_PER_IP_HOUR);
         if (ipWait) {
           return sendJson(res, 429, {
-            error: `Вы исчерпали лимит обновлений (${MAX_GEN_PER_IP_HOUR} в час). Подождите ${Math.ceil(ipWait / 60)} мин или откройте тикер, который уже собран.`,
+            error: t('Вы исчерпали лимит обновлений ({limit} в час). Подождите {min} мин или откройте тикер, который уже собран.', {
+              limit: MAX_GEN_PER_IP_HOUR,
+              min: Math.ceil(ipWait / 60),
+            }),
             retryAfterSec: ipWait,
           });
         }
         if (!allowGeneration()) {
           return sendJson(res, 429, {
-            error: 'Сервис собирает слишком много сводок прямо сейчас. Попробуйте через несколько минут или откройте тикер, который уже в кеше.',
+            error: t('Сервис собирает слишком много сводок прямо сейчас. Попробуйте через несколько минут или откройте тикер, который уже в кеше.'),
             retryAfterSec: 300,
           });
         }
@@ -1543,9 +1560,9 @@ const handleRequest = async (req, res, url) => {
       const items = all
         .map((c) => ({
           symbol: c.asset.symbol,
-          name: c.asset.name,
+          name: niceName(c.asset.name),
           type: c.asset.market,
-          typeLabel: TYPES[c.asset.market] || c.asset.market,
+          typeLabel: t(TYPES[c.asset.market] || c.asset.market),
           generatedAt: c.generatedAt,
           sentiment: c.summary?.sentiment,
           headline: c.summary?.headline,
@@ -1560,12 +1577,12 @@ const handleRequest = async (req, res, url) => {
       const out = {};
       for (const [m, arr] of Object.entries(groups)) {
         out[m] = {
-          label: MARKET_LABEL[m] || m,
+          label: t(MARKET_LABEL[m] || m),
           slug: MARKET_SLUG[m],
           items: arr
             .map((a) => ({
               symbol: a.symbol,
-              name: a.name,
+              name: niceName(a.name),
               market: a.market,
               cached: Boolean(cache[`${a.market}:${a.symbol}`]),
               url: tickerPath(a),
@@ -1661,12 +1678,29 @@ const handleRequest = async (req, res, url) => {
         for (const t of forumStore.threads()) if (t.createdAt) mod.set(threadPath(t), t.createdAt);
       }
       const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+      // Каждая страница существует в трёх языках, и в карте нужны все три адреса:
+      // поисковик обходит sitemap, а не догадывается о /en/ по hreflang в разметке.
+      // Взаимные ссылки hreflang ставятся здесь же — так связка «три копии одного
+      // текста» объявлена целиком, а не наполовину
       const xml = `<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">
 ${[...new Set(paths)]
   .map((p) => {
     const d = mod.get(p);
-    return `  <url><loc>${esc(SITE_URL + p)}</loc>${d ? `<lastmod>${esc(String(d).slice(0, 10))}</lastmod>` : ''}</url>`;
+    const links = alternates(SITE_URL, p)
+      .map((a) => `    <xhtml:link rel="alternate" hreflang="${a.lang}" href="${esc(a.url)}"/>`)
+      .join('\n');
+    return LANGS.map((l) =>
+      [
+        '  <url>',
+        `    <loc>${esc(SITE_URL + langHref(l, p))}</loc>`,
+        d ? `    <lastmod>${esc(String(d).slice(0, 10))}</lastmod>` : '',
+        links,
+        '  </url>',
+      ]
+        .filter(Boolean)
+        .join('\n')
+    ).join('\n');
   })
   .join('\n')}
 </urlset>`;
@@ -1708,7 +1742,7 @@ ${[...new Set(paths)]
             loginPage({
               siteUrl: SITE_URL,
               next,
-              error: 'Аккаунта с такой фразой нет. Зарегистрируйтесь — сервер примет эту же фразу, и аккаунт создастся с ней.',
+              error: t('Аккаунта с такой фразой нет. Зарегистрируйтесь — сервер примет эту же фразу, и аккаунт создастся с ней.'),
             })
           );
         }
@@ -1743,12 +1777,12 @@ ${[...new Set(paths)]
           return redirect(res, next);
         }
         if (forumStore.accountByNick(nick)) {
-          return fail('Этот ник занят. Выберите другой или войдите своей фразой.');
+          return fail(t('Этот ник занят. Выберите другой или войдите своей фразой.'));
         }
         forumStore.addAccount({ key, address, nick, createdAt: new Date().toISOString() });
         setSessionCookie(res, key);
         log(`обсуждения: регистрация ${nick} (${shortAddress(address)})`);
-        return redirect(res, '/forum/me?ok=' + encodeURIComponent('Аккаунт создан. Фраза — единственный ключ к нему.'));
+        return redirect(res, '/forum/me?ok=' + encodeURIComponent(t('Аккаунт создан. Фраза — единственный ключ к нему.')));
       }
 
       if (seg === 'logout') {
@@ -1921,22 +1955,22 @@ ${[...new Set(paths)]
       const slug = String(url.searchParams.get('slug') || '');
       if (slug) {
         const inst = instrumentBySlug(slug);
-        if (!inst) return sendJsonGzip(req, res, 404, { error: 'Инструмент не найден' });
+        if (!inst) return sendJsonGzip(req, res, 404, { error: t('Инструмент не найден') });
         const tf = isCtf(tfRaw) ? tfRaw : DEFAULT_CTF;
         const { series, quote } = await marketFeed.one(inst, tf);
         return sendJsonGzip(req, res, 200, {
           tf,
-          title: `${inst.name}: ${CTF[tf].one} график и цена`,
+          title: t('{name}: {tf} график и цена', { name: t(inst.name), tf: t(CTF[tf].one) }),
           // h1 страницы тоже называет интервал — без него заголовок разошёлся
           // бы с тем, что нарисовано под ним
-          h1: `${inst.name}: ${CTF[tf].one} график, цена и история`,
+          h1: t('{name}: {tf} график, цена и история', { name: t(inst.name), tf: t(CTF[tf].one) }),
           html: instChartInner({ inst, series, quote, tf }),
         });
       }
       const market = SLUG_MARKET[String(url.searchParams.get('market') || '').toLowerCase()];
       const symbol = String(url.searchParams.get('symbol') || '');
       const asset = market && symbol ? findAsset(market, symbol) : null;
-      if (!asset) return sendJsonGzip(req, res, 404, { error: 'Тикер не найден' });
+      if (!asset) return sendJsonGzip(req, res, 404, { error: t('Тикер не найден') });
       const html = await chartHtmlFor(asset, { tf: tfRaw });
       // chartHtmlFor отдаёт блок целиком, вместе с обёрткой: у тикера проще
       // заменить секцию целиком, чем разбирать её на части
@@ -2018,7 +2052,9 @@ ${[...new Set(paths)]
       const rec = cache[key];
       if (!rec) {
         res.writeHead(303, {
-          Location: `${langHref(getLang(), tickerPath(asset))}?err=` + encodeURIComponent('Сначала соберите сводку по тикеру — вопрос отвечается по её публикациям.'),
+          Location:
+            `${langHref(getLang(), tickerPath(asset))}?err=` +
+            encodeURIComponent(t('Сначала соберите сводку по тикеру — вопрос отвечается по её публикациям.')),
         });
         return res.end();
       }
@@ -2033,13 +2069,17 @@ ${[...new Set(paths)]
       const ipWait = ipBucket(ip, 'gen', 3600_000, MAX_GEN_PER_IP_HOUR);
       if (ipWait) {
         res.writeHead(303, {
-          Location: `${langHref(getLang(), tickerPath(asset))}?err=` + encodeURIComponent(`Лимит вопросов исчерпан. Попробуйте через ${Math.ceil(ipWait / 60)} мин.`),
+          Location:
+            `${langHref(getLang(), tickerPath(asset))}?err=` +
+            encodeURIComponent(t('Лимит вопросов исчерпан. Попробуйте через {min} мин.', { min: Math.ceil(ipWait / 60) })),
         });
         return res.end();
       }
       if (!allowGeneration()) {
         res.writeHead(303, {
-          Location: `${langHref(getLang(), tickerPath(asset))}?err=` + encodeURIComponent('Сервис перегружен, попробуйте через несколько минут.'),
+          Location:
+            `${langHref(getLang(), tickerPath(asset))}?err=` +
+            encodeURIComponent(t('Сервис перегружен, попробуйте через несколько минут.')),
         });
         return res.end();
       }
@@ -2048,7 +2088,9 @@ ${[...new Set(paths)]
         const reject = (kind) => {
           log(`вопрос ${key} отклонён (${kind}): ${question.slice(0, 80)}`);
           res.writeHead(303, {
-            Location: `${langHref(getLang(), tickerPath(asset))}?err=` + encodeURIComponent(VERDICT_MESSAGE[kind] || VERDICT_MESSAGE.off_topic),
+            Location:
+              `${langHref(getLang(), tickerPath(asset))}?err=` +
+              encodeURIComponent(t(VERDICT_MESSAGE[kind] || VERDICT_MESSAGE.off_topic)),
           });
           return res.end();
         };
@@ -2062,7 +2104,7 @@ ${[...new Set(paths)]
         const stored = questionStore.add({
           id: `${hash}-${slugify(ans.title || question, 48) || 'vopros'}`,
           ticker: key,
-          asset: { symbol: asset.symbol, name: asset.name, market: asset.market },
+          asset: { symbol: asset.symbol, name: niceName(asset.name), market: asset.market },
           question,
           // Заголовок делает модель: в <title>, H1 и JSON-LD не должны попасть опечатки и сленг вопроса
           title: ans.title,
@@ -2135,7 +2177,7 @@ ${[...new Set(paths)]
             );
           if (bad) return fail(bad);
           const wait = ipBucket(ip, 'forum', 3600_000, MAX_FORUM_PER_HOUR);
-          if (wait) return fail(`Слишком часто. Попробуйте через ${Math.ceil(wait / 60)} мин.`);
+          if (wait) return fail(t('Слишком часто. Попробуйте через {min} мин.', { min: Math.ceil(wait / 60) }));
 
           const rec = forumStore.addMessage({
             ticker: key,
@@ -2187,7 +2229,10 @@ ${[...new Set(paths)]
             );
           }
           const wait = ipBucket(ip, 'forum', 3600_000, MAX_FORUM_PER_HOUR);
-          if (wait) return redirect(res, threadPath(thread) + '?err=' + encodeURIComponent(`Слишком часто. Попробуйте через ${Math.ceil(wait / 60)} мин.`));
+          if (wait) {
+            const msg = t('Слишком часто. Попробуйте через {min} мин.', { min: Math.ceil(wait / 60) });
+            return redirect(res, threadPath(thread) + '?err=' + encodeURIComponent(msg));
+          }
 
           // Отвечаем только внутрь этой ветки: чужой parent из формы игнорируем
           const wantParent = Number(form.get('parent')) || 0;
