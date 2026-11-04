@@ -1759,31 +1759,39 @@ const handleRequest = async (req, res, url) => {
         for (const t of forumStore.threads()) if (t.createdAt) mod.set(threadPath(t), t.createdAt);
       }
       const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
-      // Каждая страница существует в трёх языках, и в карте нужны все три адреса:
-      // поисковик обходит sitemap, а не догадывается о /en/ по hreflang в разметке.
-      // Взаимные ссылки hreflang ставятся здесь же — так связка «три копии одного
-      // текста» объявлена целиком, а не наполовину
+      // Не всякий путь существует в трёх языках. Страница вопроса и тема форума
+      // написаны на одном языке, и три адреса с одинаковым текстом — это три
+      // копии, а не три версии: такой путь объявляется один раз, со своим
+      // hreflang и без x-default
+      const singleLang = new Map();
+      for (const q of questionStore.all()) {
+        if (q.asset) singleLang.set(questionPath(q.asset, q), q.lang || 'ru');
+      }
+      if (FORUM_ENABLED) {
+        for (const th of forumStore.threads()) singleLang.set(threadPath(th), th.lang || 'ru');
+      }
+      const entry = (p) => {
+        const d = mod.get(p);
+        const lastmod = d ? [`    <lastmod>${esc(String(d).slice(0, 10))}</lastmod>`] : [];
+        const only = singleLang.get(p);
+        if (only) {
+          const link = `    <xhtml:link rel="alternate" hreflang="${only}" href="${esc(SITE_URL + langHref(only, p))}"/>`;
+          return ['  <url>', `    <loc>${esc(SITE_URL + langHref(only, p))}</loc>`, ...lastmod, link, '  </url>'].join('\n');
+        }
+        // Каждая страница существует в трёх языках, и в карте нужны все три адреса:
+        // поисковик обходит sitemap, а не догадывается о /en/ по hreflang в разметке.
+        // Взаимные ссылки hreflang ставятся здесь же — так связка «три копии одного
+        // текста» объявлена целиком, а не наполовину
+        const links = alternates(SITE_URL, p)
+          .map((a) => `    <xhtml:link rel="alternate" hreflang="${a.lang}" href="${esc(a.url)}"/>`)
+          .join('\n');
+        return LANGS.map((l) =>
+          ['  <url>', `    <loc>${esc(SITE_URL + langHref(l, p))}</loc>`, ...lastmod, links, '  </url>'].filter(Boolean).join('\n')
+        ).join('\n');
+      };
       const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">
-${[...new Set(paths)]
-  .map((p) => {
-    const d = mod.get(p);
-    const links = alternates(SITE_URL, p)
-      .map((a) => `    <xhtml:link rel="alternate" hreflang="${a.lang}" href="${esc(a.url)}"/>`)
-      .join('\n');
-    return LANGS.map((l) =>
-      [
-        '  <url>',
-        `    <loc>${esc(SITE_URL + langHref(l, p))}</loc>`,
-        d ? `    <lastmod>${esc(String(d).slice(0, 10))}</lastmod>` : '',
-        links,
-        '  </url>',
-      ]
-        .filter(Boolean)
-        .join('\n')
-    ).join('\n');
-  })
-  .join('\n')}
+${[...new Set(paths)].map(entry).join('\n')}
 </urlset>`;
       res.writeHead(200, { 'Content-Type': 'application/xml; charset=utf-8', 'Cache-Control': 'public, max-age=3600' });
       return res.end(xml);
@@ -2187,6 +2195,9 @@ ${[...new Set(paths)]
           ticker: key,
           asset: { symbol: asset.symbol, name: niceName(asset.name), market: asset.market },
           question,
+          // Язык, на котором задан вопрос: на нём же написан ответ, и другого
+          // перевода у страницы нет. По нему строится canonical и hreflang
+          lang: getLang(),
           // Заголовок делает модель: в <title>, H1 и JSON-LD не должны попасть опечатки и сленг вопроса
           title: ans.title,
           askedAt: new Date().toISOString(),
@@ -2265,6 +2276,9 @@ ${[...new Set(paths)]
             parent: null,
             title,
             body,
+            // Язык, на котором написана тема: переводов у неё нет, и в sitemap
+            // адрес не должен обещать три версии одного текста
+            lang: getLang(),
             nick: user.account.nick,
             key: user.key,
             address: user.account.address,
@@ -2377,6 +2391,14 @@ ${[...new Set(paths)]
       const asset = rec?.asset && rec.asset.market === market ? rec.asset : null;
       if (!rec || !asset) {
         return sendHtml(res, notFoundPage({ siteUrl: SITE_URL, siteName: SITE_NAME }), { status: 404, cache: 'no-store' });
+      }
+      // Ответ написан на одном языке и перевода не имеет. /en/ того же вопроса был
+      // бы копией с самоссылающимся canonical и обещанием английского текста,
+      // которого нет. Ведём на настоящий адрес — тот, что объявлен в hreflang
+      const qLang = rec.lang || 'ru';
+      if (qLang !== getLang()) {
+        res.writeHead(301, { Location: langHref(qLang, questionPath(asset, rec)) });
+        return res.end();
       }
       const html = questionPage({
         asset,
