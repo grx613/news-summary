@@ -13,6 +13,13 @@ import { createIndexCrawler } from './lib/index-crawler.js';
 import { createChartStore, TIMEFRAMES } from './lib/charts.js';
 import { createChartCrawler } from './lib/chart-crawler.js';
 import { createChartSeries } from './lib/chart-intraday.js';
+import {
+  TRANS_LANG,
+  TRANSLATION_SCHEMA,
+  TRANSLATION_SYSTEM,
+  buildTranslatePrompt,
+  applyTranslation,
+} from './lib/summary-translate.js';
 import { createMarketFeed, isCtf, isCat, DEFAULT_CTF, CTF, CATS, INSTRUMENTS, instrumentBySlug, instrumentPath } from './lib/markets.js';
 import { chartsPage, chartsBoard, chartsMeta, instrumentPage, instChartInner, cardInnerHtml, pollFor } from './lib/market-render.js';
 import { chartBlock, tfList, DEFAULT_TF } from './lib/chart-render.js';
@@ -202,6 +209,34 @@ function validateSummary(s) {
   };
 }
 
+// Переводы проверяются отдельно от сводки: структура та же, но sentiment
+// и ссылки в них не хранятся. Битая запись отбрасывается по одному языку,
+// не утягивая за собой соседний
+function validateTranslation(tr) {
+  if (!tr || typeof tr !== 'object' || Array.isArray(tr)) return null;
+  const str = (v) => typeof v === 'string' && v.trim().length > 0;
+  if (!str(tr.headline) || !str(tr.overview)) return null;
+  const point = (k) => (k && typeof k === 'object' && str(k.text) ? { text: k.text.trim(), refs: Array.isArray(k.refs) ? k.refs.filter(Number.isInteger) : [] } : null);
+  return {
+    headline: tr.headline.trim(),
+    overview: tr.overview.trim(),
+    key_points: Array.isArray(tr.key_points) ? tr.key_points.map(point).filter(Boolean) : [],
+    risks: Array.isArray(tr.risks) ? tr.risks.filter(str).map((x) => x.trim()) : [],
+    catalysts: Array.isArray(tr.catalysts) ? tr.catalysts.filter(str).map((x) => x.trim()) : [],
+    community: str(tr.community) ? tr.community.trim() : '',
+  };
+}
+
+function validateI18n(obj) {
+  const out = {};
+  if (!obj || typeof obj !== 'object') return out;
+  for (const lang of ['en', 'es']) {
+    const clean = validateTranslation(obj[lang]);
+    if (clean) out[lang] = clean;
+  }
+  return out;
+}
+
 const cacheKey = (a) => `${a.market}:${a.symbol}`.toUpperCase();
 
 let cache = {};
@@ -223,7 +258,7 @@ try {
     clean.model = rec.summary.model;
     if (clean.costUsd) totalCostUsd += clean.costUsd;
     if (clean.tokens) totalTokens += clean.tokens;
-    cache[key] = { ...rec, summary: clean };
+    cache[key] = { ...rec, summary: clean, i18n: validateI18n(rec.i18n) };
   }
 } catch {
   cache = {};
@@ -819,18 +854,64 @@ async function summarize(a, news) {
   throw Object.assign(new Error(t('Модель вернула некорректный ответ, попробуйте позже')), { status: 502 });
 }
 
+// ---------------------------------------------------------------- перевод сводок
+// Саммари переводится сразу после генерации: страница /en не должна
+// собираться по заходу посетителя. Провал перевода не отменяет сводку —
+// покажется русский текст
+async function translateSummary(a, summary, lang) {
+  const out = await callModel(buildTranslatePrompt(a, summary, lang), {
+    schema: TRANSLATION_SCHEMA,
+    schemaName: 'translation',
+    system: TRANSLATION_SYSTEM,
+    maxTokens: 3000,
+    temperature: 0.2,
+    timeoutMs: 90_000,
+  });
+  const tr = applyTranslation(summary, parseLooseJson(out.text));
+  if (!tr) return null;
+  return { ...tr, model: out.model, tokens: out.tokens, costUsd: out.costUsd };
+}
+
+async function translateAll(a, summary) {
+  const out = {};
+  let tokens = 0;
+  let costUsd = 0;
+  for (const lang of Object.keys(TRANS_LANG)) {
+    try {
+      const tr = await translateSummary(a, summary, lang);
+      if (!tr) {
+        console.warn(`перевод ${a.market}:${a.symbol} ${lang}: модель вернула невалидный ответ`);
+        continue;
+      }
+      out[lang] = tr;
+      tokens += tr.tokens || 0;
+      costUsd += tr.costUsd || 0;
+    } catch (e) {
+      // Сеть и лимиты провайдера — не повод терять сводку целиком
+      console.warn(`перевод ${a.market}:${a.symbol} ${lang}: ${e.message}`);
+    }
+  }
+  return { i18n: out, tokens, costUsd };
+}
+
 async function buildSummary(a) {
   const { items, used, failed } = await collectNews(a);
   if (!items.length) {
     throw Object.assign(new Error(t('Свежих публикаций по этому тикеру не нашлось')), { status: 404 });
   }
   const summary = await summarize(a, items);
+  // Переводы идут сразу: страница /en не должна собираться по заходу посетителя.
+  // Провал перевода не отменяет сводку — покажется русский текст
+  const tr = await translateAll(a, summary);
   // Расход считаем по факту генерации, а не по содержимому кеша: записи из старых версий его не хранят
-  if (summary.costUsd) totalCostUsd += summary.costUsd;
-  if (summary.tokens) totalTokens += summary.tokens;
+  const costUsd = (summary.costUsd || 0) + tr.costUsd;
+  const tokens = (summary.tokens || 0) + tr.tokens;
+  if (costUsd) totalCostUsd += costUsd;
+  if (tokens) totalTokens += tokens;
   return {
     asset: a,
-    summary,
+    summary: { ...summary, costUsd, tokens },
+    i18n: tr.i18n,
     news: items,
     sources: used,
     warnings: failed,
@@ -1565,7 +1646,7 @@ const handleRequest = async (req, res, url) => {
           typeLabel: t(TYPES[c.asset.market] || c.asset.market),
           generatedAt: c.generatedAt,
           sentiment: c.summary?.sentiment,
-          headline: c.summary?.headline,
+          headline: c.i18n?.[getLang()]?.headline || c.summary?.headline,
         }))
         .sort((a, b) => String(b.generatedAt).localeCompare(String(a.generatedAt)))
         .slice(0, limit);
