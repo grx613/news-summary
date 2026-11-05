@@ -2179,9 +2179,11 @@ ${[...[...new Set(paths)].map(entry), ...families.map(familyEntry)].join('\n')}
     if (url.pathname === '/charts/hide' || url.pathname === '/charts/settings') {
       // Возврат только на доску: адрес приходит из формы, и уводить человека
       // на произвольную страницу сайта она права не даёт
+      // Шаблон, а не startsWith: «/charts/../forum» начинается правильно, но
+      // браузер раскроет точки и уведёт с доски
       const safeBoard = (raw) => {
         const p = String(raw || '');
-        return p.startsWith('/charts') && !p.startsWith('//') ? p : '/charts';
+        return /^\/charts(\/[a-z0-9-]+)?(\?[\w=&%.-]*)?$/i.test(p) ? p : '/charts';
       };
       const back = safeBoard(url.searchParams.get('back'));
       const hidden = hiddenOf(req);
