@@ -38,6 +38,9 @@ import {
   instrumentPath,
   fmtValue,
   fmtChange,
+  HIDE_COOKIE,
+  parseHidden,
+  hiddenValue,
 } from './lib/markets.js';
 import {
   chartsPage,
@@ -48,6 +51,8 @@ import {
   cardInnerHtml,
   pollFor,
   unitToken,
+  settingsPage,
+  settingsPath,
 } from './lib/market-render.js';
 import { chartBlock, tfList, DEFAULT_TF, fmtPrice } from './lib/chart-render.js';
 import { indexPage, indicesPage, homeIndices, val as idxVal, signed as idxSigned, pct as idxPct } from './lib/index-render.js';
@@ -1139,6 +1144,25 @@ function tfFromCookie(req, url) {
   return !url.searchParams.get('tf') && Boolean(parseCookies(req)[TF_COOKIE]);
 }
 
+// Скрытые карточки читаются из куки: доска личная, но адрес у неё один —
+// иначе каждый набор убранных карточек стал бы отдельной страницей в индексе.
+// Куку ставит ответ на форму, читает и сервер, и он же отдаёт доску без
+// скрытого: скрипт перерисовки карточек о скрытии просто не знает
+const hiddenOf = (req) => parseHidden(parseCookies(req)[HIDE_COOKIE]);
+function writeHiddenCookie(res, hidden) {
+  const value = hiddenValue(hidden);
+  const parts = [
+    `${HIDE_COOKIE}=${encodeURIComponent(value)}`,
+    'Path=/',
+    'SameSite=Lax',
+    // Пустой список удаляет куку: «показать все» не должно оставлять после
+    // себя след, из-за которого доска останется персональной
+    `Max-Age=${value ? 31536000 : 0}`,
+  ];
+  if (isHttps()) parts.push('Secure');
+  res.setHeader('Set-Cookie', parts.join('; '));
+}
+
 function clearSessionCookie(res) {
   res.setHeader('Set-Cookie', `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
 }
@@ -2124,11 +2148,12 @@ ${[...[...new Set(paths)].map(entry), ...families.map(familyEntry)].join('\n')}
       // Неизвестный интервал откатывается на запомненный, а тот — на умолчание:
       // страница не должна отдавать 404 из-за параметра, набранного руками
       const tf = pickTf(req, url, CTF_ORDER, DEFAULT_CTF);
-      const { rows, quotes } = await marketFeed.board(cat, tf, { set });
+      const hidden = hiddenOf(req);
+      const { rows, quotes } = await marketFeed.board(cat, tf, { set, hidden });
       // Котировки индексов заменяются живыми: иначе карточка считает
       // процент по полю Мосбиржи «к предыдущей сделке»
       for (const r of rows) quotes[r.inst.key] = liveForInstrument(r.inst, quotes[r.inst.key]);
-      const out = chartsPage({ cat, tf, set, rows, quotes, siteName: SITE_NAME });
+      const out = chartsPage({ cat, tf, set, rows, quotes, hidden, siteName: SITE_NAME });
       return sendHtml(
         res,
         page({
@@ -2142,8 +2167,77 @@ ${[...[...new Set(paths)].map(entry), ...families.map(familyEntry)].join('\n')}
         }),
         // Дневные и крупнее меняются раз в сутки, минутные — постоянно:
         // кешировать их одинаково значило бы показывать пятиминутную давность.
-        // Признак — сам интервал, а не «тот, что открывается по умолчанию»
-        { cache: CTF[tf]?.daily ? (tfFromCookie(req, url) ? 'private, max-age=120' : 'public, max-age=120') : 'no-store' }
+        // Признак — сам интервал, а не «тот, что открывается по умолчанию».
+        // Доска с убранными карточками у каждого своя, в общий кеш её нельзя
+        { cache: CTF[tf]?.daily ? (tfFromCookie(req, url) || hidden.size ? 'private, max-age=120' : 'public, max-age=120') : 'no-store' }
+      );
+    }
+
+    // Настройка доски и крестик на карточке. Оба адреса стоят до подстраниц
+    // инструментов: иначе «settings» разобрался бы как слаг инструмента и
+    // вернул бы 404, а «hide» не нашёл бы маршрута вовсе
+    if (url.pathname === '/charts/hide' || url.pathname === '/charts/settings') {
+      // Возврат только на доску: адрес приходит из формы, и уводить человека
+      // на произвольную страницу сайта она права не даёт
+      const safeBoard = (raw) => {
+        const p = String(raw || '');
+        return p.startsWith('/charts') && !p.startsWith('//') ? p : '/charts';
+      };
+      const back = safeBoard(url.searchParams.get('back'));
+      const hidden = hiddenOf(req);
+
+      if (url.pathname === '/charts/hide') {
+        // Скрытие меняет состояние, поэтому только формой: ссылку открыл бы
+        // предзагрузчик страниц и убрал бы карточку мимо воли человека
+        if (req.method !== 'POST') return redirect(res, back);
+        const bodyRaw = await readBody(req, 4 * 1024);
+        const form = new URLSearchParams(bodyRaw);
+        const inst = instrumentBySlug(String(form.get('slug') || ''));
+        if (!inst) return redirect(res, back);
+        if (form.get('do') === 'show') hidden.delete(inst.slug);
+        else hidden.add(inst.slug);
+        writeHiddenCookie(res, hidden);
+        // Скрипт перерисует доску сам: переход на целую страницу ему не нужен
+        if (req.headers['x-requested-with'] === 'fetch') {
+          res.writeHead(204, { 'Cache-Control': 'no-store' });
+          return res.end();
+        }
+        return redirect(res, safeBoard(form.get('back')));
+      }
+
+      if (req.method === 'POST') {
+        const bodyRaw = await readBody(req, 16 * 1024);
+        const form = new URLSearchParams(bodyRaw);
+        // «Показать все» — та же форма: кнопка присылает do=reset, и это
+        // единственный способ вернуть всё разом, не снимая галочки по одной.
+        // Галочка значит «показывать», а хранится обратное — скрытое, поэтому
+        // список переворачивается: иначе отмеченные инструменты исчезли бы,
+        // а неотмеченные остались
+        const shown = new Set(
+          form.getAll('show').map((v) => instrumentBySlug(v)?.slug).filter(Boolean)
+        );
+        const next = form.get('do') === 'reset'
+          ? new Set()
+          : new Set(INSTRUMENTS.filter((i) => !shown.has(i.slug)).map((i) => i.slug));
+        writeHiddenCookie(res, next);
+        return redirect(res, safeBoard(form.get('back')));
+      }
+
+      const out = settingsPage({ hidden, back, siteName: SITE_NAME });
+      return sendHtml(
+        res,
+        page({
+          siteUrl: SITE_URL,
+          title: out.title,
+          description: out.description,
+          canonical: out.canonical,
+          body: out.body,
+          // Страница личная и у каждого своя: в индекс её пускать незачем,
+          // доска и её инструменты индексируются обычными адресами
+          noindex: true,
+          wide: true,
+        }),
+        { cache: 'no-store' }
       );
     }
 
@@ -2168,9 +2262,10 @@ ${[...[...new Set(paths)].map(entry), ...families.map(familyEntry)].join('\n')}
       // Набор нужен только меню: список соседей внизу и подсветка категории.
       // Сама страница инструмента одна и та же во всех наборах
       const { set } = pickSet(url, 'all');
+      const hidden = hiddenOf(req);
       const { series, quote } = await marketFeed.one(inst, tf);
       const liveQuote = liveForInstrument(inst, quote);
-      const out = instrumentPage({ inst, series, quote: liveQuote, tf, set, siteUrl: SITE_URL, siteName: SITE_NAME });
+      const out = instrumentPage({ inst, series, quote: liveQuote, tf, set, hidden, siteUrl: SITE_URL, siteName: SITE_NAME });
       return sendHtml(
         res,
         page({
@@ -2186,8 +2281,8 @@ ${[...[...new Set(paths)].map(entry), ...families.map(familyEntry)].join('\n')}
           wide: true,
         }),
         // Та же логика, что у сетки: минутный ряд живёт секунды, дневной — сутки,
-        // а запомненный в куке интервал — своё у каждого
-        { cache: CTF[tf]?.daily ? (tfFromCookie(req, url) ? 'private, max-age=120' : 'public, max-age=120') : 'no-store' }
+        // а запомненный в куке интервал и скрытые карточки — своё у каждого
+        { cache: CTF[tf]?.daily ? (tfFromCookie(req, url) || hidden.size ? 'private, max-age=120' : 'public, max-age=120') : 'no-store' }
       );
     }
 
@@ -2198,7 +2293,8 @@ ${[...[...new Set(paths)].map(entry), ...families.map(familyEntry)].join('\n')}
       const catRaw = String(url.searchParams.get('cat') || 'all');
       const { set, cat } = pickSet(url, isCat(catRaw) ? catRaw : 'all');
       const tf = pickTf(req, url, CTF_ORDER, DEFAULT_CTF);
-      const { rows, quotes } = await marketFeed.board(cat, tf, { set });
+      const hidden = hiddenOf(req);
+      const { rows, quotes } = await marketFeed.board(cat, tf, { set, hidden });
       // Котировки индексов заменяются живыми: иначе карточка считает
       // процент по полю Мосбиржи «к предыдущей сделке»
       for (const r of rows) quotes[r.inst.key] = liveForInstrument(r.inst, quotes[r.inst.key]);
@@ -2212,7 +2308,7 @@ ${[...[...new Set(paths)].map(entry), ...families.map(familyEntry)].join('\n')}
         // в браузере осталось бы название вкладки, которую уже не видно
         title: out.title,
         description: out.description,
-        html: chartsBoard({ cat, tf, set, rows, quotes }),
+        html: chartsBoard({ cat, tf, set, rows, quotes, hidden }),
       });
     }
 
@@ -2225,6 +2321,7 @@ ${[...[...new Set(paths)].map(entry), ...families.map(familyEntry)].join('\n')}
         if (!inst) return sendJsonGzip(req, res, 404, { error: t('Инструмент не найден') });
         const tf = pickTf(req, url, CTF_ORDER, DEFAULT_CTF);
         const { set } = pickSet(url, 'all');
+        const hidden = hiddenOf(req);
         const { series, quote } = await marketFeed.one(inst, tf);
         return sendJsonGzip(req, res, 200, {
           tf,
@@ -2233,7 +2330,7 @@ ${[...[...new Set(paths)].map(entry), ...families.map(familyEntry)].join('\n')}
           // Меню, h1 и график приходят одним куском: полоса интервалов стоит
           // над заголовком, и без неё в ответе отмеченный интервал остался бы
           // прежним, пока под ним уже нарисован новый ряд
-          html: instBoard({ inst, series, quote: liveForInstrument(inst, quote), tf, set }),
+          html: instBoard({ inst, series, quote: liveForInstrument(inst, quote), tf, set, hidden }),
         });
       }
       const market = SLUG_MARKET[String(url.searchParams.get('market') || '').toLowerCase()];
@@ -2294,7 +2391,7 @@ ${[...[...new Set(paths)].map(entry), ...families.map(familyEntry)].join('\n')}
       const catRaw = String(url.searchParams.get('cat') || '');
       const { set, cat } = pickSet(url, isCat(catRaw) ? catRaw : 'all');
       const tf = pickTf(req, url, CTF_ORDER, DEFAULT_CTF);
-      const { rows, quotes } = await marketFeed.board(cat, tf, { set });
+      const { rows, quotes } = await marketFeed.board(cat, tf, { set, hidden: hiddenOf(req) });
       // Котировки индексов заменяются живыми: иначе карточка считает
       // процент по полю Мосбиржи «к предыдущей сделке»
       for (const r of rows) quotes[r.inst.key] = liveForInstrument(r.inst, quotes[r.inst.key]);

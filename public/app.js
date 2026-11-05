@@ -501,6 +501,32 @@
     switchBoard(board, link, { tf, cat }, true);
   });
 
+  // Крестик на карточке и «вернуть» под сеткой — обычные формы: без скрипта
+  // они отправляются и перезагружают доску. Со скриптом отправляем ту же
+  // форму в фоне и перерисовываем доску на месте: кука ставится ответом
+  // сервера, и следующий фрагмент приходит уже без скрытой карточки
+  document.addEventListener('submit', async (e) => {
+    const form = e.target.closest('form.ghide, form.gshow');
+    if (!form) return;
+    const board = form.closest('[data-live="charts"]');
+    if (!board) return;
+    e.preventDefault();
+    const cell = form.closest('.gcell');
+    if (cell) cell.style.opacity = '.4';
+    try {
+      const r = await fetch(form.action, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'fetch' },
+        body: new URLSearchParams(new FormData(form)).toString(),
+        credentials: 'same-origin',
+      });
+      if (!r.ok) throw new Error(String(r.status));
+      await switchBoard(board, null, { href: location.href }, false);
+    } catch {
+      form.submit();
+    }
+  });
+
   // Кнопка «назад» после переключения должна возвращать прежний интервал
   // или прежнюю вкладку, а не прошлую страницу: адрес менялся через pushState
   window.addEventListener('popstate', (e) => {
