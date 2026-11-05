@@ -292,6 +292,7 @@
     }
 
     const cat = grid.dataset.cat || 'all';
+    const set = grid.dataset.set || 'all';
     const tf = grid.dataset.tf || '1d';
     const every = Number(grid.dataset.poll) || 0;
     if (!every) return;
@@ -313,7 +314,7 @@
       if (busy || document.hidden || !grid.isConnected) return;
       busy = true;
       try {
-        const r = await fetch(`/api/charts?cat=${encodeURIComponent(cat)}&tf=${encodeURIComponent(tf)}&lang=${encodeURIComponent(LANG)}`, {
+        const r = await fetch(`/api/charts?cat=${encodeURIComponent(cat)}&set=${encodeURIComponent(set)}&tf=${encodeURIComponent(tf)}&lang=${encodeURIComponent(LANG)}`, {
           headers: { Accept: 'application/json' },
         });
         if (r.ok) paint((await r.json()).cards);
@@ -348,7 +349,7 @@
   // Обработчик висит на документе, а не на блоке: у тикера блок заменяется
   // целиком вместе со своими потомками, и обработчик на нём умер бы после
   // первого же переключения
-  const loadFragment = async (board, tf, cat) => {
+  const loadFragment = async (board, tf, cat, set) => {
     const kind = board.dataset.live;
     let url;
     // Язык едет вместе с запросом: у /api нет префикса адреса, и без параметра
@@ -356,9 +357,13 @@
     // интервала вставляло бы русские подписи и ссылки
     const langQ = `&lang=${encodeURIComponent(LANG)}`;
     if (kind === 'charts') {
-      url = `/api/board?cat=${encodeURIComponent(cat || 'all')}&tf=${encodeURIComponent(tf)}${langQ}`;
+      url = `/api/board?cat=${encodeURIComponent(cat || 'all')}&set=${encodeURIComponent(
+        set || 'all'
+      )}&tf=${encodeURIComponent(tf)}${langQ}`;
     } else if (kind === 'inst') {
-      url = `/api/chart?slug=${encodeURIComponent(board.dataset.slug || '')}&tf=${encodeURIComponent(tf)}${langQ}`;
+      url = `/api/chart?slug=${encodeURIComponent(board.dataset.slug || '')}&set=${encodeURIComponent(
+        board.dataset.set || 'all'
+      )}&tf=${encodeURIComponent(tf)}${langQ}`;
     } else {
       url = `/api/chart?market=${encodeURIComponent(board.dataset.market || '')}&symbol=${encodeURIComponent(
         board.dataset.symbol || ''
@@ -372,10 +377,13 @@
   // Само переключение. push=false — когда состояние уже пришло от кнопки
   // «назад»: новый шаг истории там не нужен, иначе назад пришлось бы
   // нажимать дважды. link — ссылка, на которую нажали: из неё берётся адрес
-  const switchBoard = async (board, link, { tf, cat, href }, push) => {
+  const switchBoard = async (board, link, { tf, cat, set, href }, push) => {
     const kind = board.dataset.live;
     const nextTf = tf || board.dataset.tf;
     const nextCat = cat || board.dataset.cat || 'all';
+    // Набор приезжает вместе с фрагментом и в состояние истории: он решает,
+    // какие карточки на вкладке «Все» и какие вкладки вообще видны
+    const nextSet = set || board.dataset.set || 'all';
 
     // Открытая таблица должна остаться открытой: разметка заменяется целиком,
     // и <details> без этого схлопнулся бы на каждом переключении
@@ -384,7 +392,7 @@
 
     board.classList.add('loading');
     try {
-      const data = await loadFragment(board, nextTf, nextCat);
+      const data = await loadFragment(board, nextTf, nextCat, nextSet);
 
       // У тикера ответ приходит вместе с обёрткой — заменяем секцию целиком,
       // у сетки и инструмента меняем только внутренность
@@ -436,8 +444,8 @@
       // возврате «назад» — собранный из состояния, там нужны оба параметра
       const u = href ? new URL(href, location.origin) : new URL(link.href);
       u.hash = '';
-      if (push) history.pushState({ tf: nextTf, cat: nextCat }, '', u);
-      else history.replaceState({ tf: nextTf, cat: nextCat }, '', u);
+      if (push) history.pushState({ tf: nextTf, cat: nextCat, set: nextSet }, '', u);
+      else history.replaceState({ tf: nextTf, cat: nextCat, set: nextSet }, '', u);
     } catch (err) {
       // Не смогли тихо — пусть сработает ссылка: честная загрузка лучше
       // застывшего экрана
@@ -463,7 +471,11 @@
   // прежний ряд — состояние и картинка разойдутся
   const firstBoard = document.querySelector('[data-live]');
   if (firstBoard) {
-    history.replaceState({ tf: firstBoard.dataset.tf, cat: firstBoard.dataset.cat }, '', location.href);
+    history.replaceState(
+      { tf: firstBoard.dataset.tf, cat: firstBoard.dataset.cat, set: firstBoard.dataset.set || 'all' },
+      '',
+      location.href
+    );
     // Пришли по ссылке с интервалом — он же и запомнился. Нажатие перехвачено
     // выше, но ссылку могли открыть в новой вкладке или прислать её извне
     const asked = new URL(location.href).searchParams.get('tf');

@@ -455,6 +455,15 @@ a.ftree-row:hover .ft-text { color: var(--accent); }
 /* Меню «Графиков» стоит на обеих страницах сразу под меню сайта и с одинаковым
    отступом: при переходе между сеткой и инструментом кнопки не сдвигаются */
 .gnav { margin: 18px 0 22px; }
+/* Полоса наборов рынков: мельче категорий нарочно — это выбор охвата, а не
+   переход по разделу, и выделяться она сильнее категорий не должна */
+.gsets { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
+.gset {
+  padding: 4px 12px; border-radius: 999px; font-size: 12.5px; text-decoration: none;
+  color: var(--muted); background: transparent; border: 1px solid var(--border);
+}
+.gset:hover { color: var(--text); border-color: var(--accent); }
+.gset.on { color: var(--text); background: var(--card); border-color: rgba(47,129,247,.6); }
 .gnav .gtabs { margin: 0 0 6px; }
 .gtabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 6px; }
 .gtab {

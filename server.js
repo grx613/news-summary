@@ -27,8 +27,13 @@ import {
   DEFAULT_CTF,
   CTF,
   CTF_ORDER,
-  CATS,
+  SETS,
   INSTRUMENTS,
+  catsOf,
+  isSet,
+  setMeta,
+  defaultSet,
+  chartsPath,
   instrumentBySlug,
   instrumentPath,
   fmtValue,
@@ -1116,6 +1121,17 @@ function pickTf(req, url, list, fallback) {
   return nearestTf(parseCookies(req)[TF_COOKIE], list) || fallback;
 }
 
+// Набор рынков: явный параметр адреса, иначе набор языка. Куки здесь нет
+// намеренно — ответ остаётся общим для всех и кешируется, а выбор человека
+// едет в ссылке. Категории, которой в наборе нет, соответствует «Все»:
+// страница не должна отдавать пустую сетку из-за параметра в адресе
+function pickSet(url, cat) {
+  const raw = String(url.searchParams.get('set') || '');
+  const set = isSet(raw) ? raw : defaultSet(getLang());
+  if (cat !== 'all' && !catsOf(set).some((c) => c.key === cat)) return { set, cat: 'all' };
+  return { set, cat };
+}
+
 // Интервал пришёл из куки, а не из адреса. Такой ответ у каждого посетителя
 // свой: в общий кеш его отдавать нельзя, браузеру — можно, ключ там меняется
 // вместе с кукой (Vary: Cookie)
@@ -1822,9 +1838,15 @@ const handleRequest = async (req, res, url) => {
       for (const t of HOME_TABS) if (t.key !== 'all') paths.push(`/?tab=${t.key}`);
       if (dividendCrawler.status().stored) paths.push('/dividends');
       // Страница графиков и её вкладки: у каждой свой заголовок, описание
-      // и самоссылающийся canonical, поэтому это не копии одной страницы
-      paths.push('/charts');
-      for (const c of CATS) if (c.key !== 'all') paths.push(`/charts?cat=${c.key}`);
+      // и самоссылающийся canonical, поэтому это не копии одной страницы.
+      // Набор по умолчанию у каждого языка свой, поэтому одна и та же доска
+      // («индексы мира») записана в языках разными адресами: /en/charts?cat=indices
+      // и /ru/charts?cat=indices&set=world. Такие записи идут семьями — адрес
+      // на каждый язык и hreflang между ними, — а не одним общим путём
+      const families = [];
+      for (const st of SETS) {
+        for (const c of catsOf(st.key)) families.push(Object.fromEntries(LANGS.map((l) => [l, chartsPath(c.key, st.key, null, l)])));
+      }
       // Страница каждого инструмента: у всех свой заголовок и своё содержимое
       for (const i of INSTRUMENTS) paths.push(instrumentPath(i));
       // Индексы попадают в карту только со значениями: страница из одних прочерков
@@ -1904,9 +1926,16 @@ const handleRequest = async (req, res, url) => {
           ['  <url>', `    <loc>${esc(SITE_URL + langHref(l, p))}</loc>`, ...lastmod, links, '  </url>'].filter(Boolean).join('\n')
         ).join('\n');
       };
+      const familyEntry = (fam) => {
+        const links = [
+          ...LANGS.map((l) => `    <xhtml:link rel="alternate" hreflang="${l}" href="${esc(SITE_URL + langHref(l, fam[l]))}"/>`),
+          `    <xhtml:link rel="alternate" hreflang="x-default" href="${esc(SITE_URL + langHref(DEFAULT_LANG, fam[DEFAULT_LANG]))}"/>`,
+        ].join('\n');
+        return LANGS.map((l) => ['  <url>', `    <loc>${esc(SITE_URL + langHref(l, fam[l]))}</loc>`, links, '  </url>'].join('\n')).join('\n');
+      };
       const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">
-${[...new Set(paths)].map(entry).join('\n')}
+${[...[...new Set(paths)].map(entry), ...families.map(familyEntry)].join('\n')}
 </urlset>`;
       res.writeHead(200, { 'Content-Type': 'application/xml; charset=utf-8', 'Cache-Control': 'public, max-age=3600' });
       return res.end(xml);
@@ -2078,16 +2107,28 @@ ${[...new Set(paths)].map(entry).join('\n')}
     // Страница с сеткой свечей по рынкам. Ряды справочные и запрашиваются
     // по требованию, поэтому своего файла и крона у неё нет — только кеш в памяти
     if (url.pathname === '/charts' || url.pathname === '/charts/') {
+      // Набор, совпавший с набором языка, из адреса убирается: голый /en/charts
+      // и есть мировые рынки, и ?set=world рядом с ним — второй адрес той же
+      // страницы. Ссылки набора такой адрес и не строят, но его набирают руками
+      const setRaw = String(url.searchParams.get('set') || '');
+      if (isSet(setRaw) && setRaw === defaultSet(getLang())) {
+        url.searchParams.delete('set');
+        const qs2 = url.searchParams.toString();
+        res.writeHead(301, { Location: langHref(getLang(), '/charts') + (qs2 ? `?${qs2}` : '') });
+        return res.end();
+      }
       const catRaw = String(url.searchParams.get('cat') || 'all');
-      const cat = isCat(catRaw) ? catRaw : 'all';
+      // Набор решает и форму категории: категории, которой в нём нет, здесь
+      // соответствует «Все», а не пустая сетка
+      const { set, cat } = pickSet(url, isCat(catRaw) ? catRaw : 'all');
       // Неизвестный интервал откатывается на запомненный, а тот — на умолчание:
       // страница не должна отдавать 404 из-за параметра, набранного руками
       const tf = pickTf(req, url, CTF_ORDER, DEFAULT_CTF);
-      const { rows, quotes } = await marketFeed.board(cat, tf);
+      const { rows, quotes } = await marketFeed.board(cat, tf, { set });
       // Котировки индексов заменяются живыми: иначе карточка считает
       // процент по полю Мосбиржи «к предыдущей сделке»
       for (const r of rows) quotes[r.inst.key] = liveForInstrument(r.inst, quotes[r.inst.key]);
-      const out = chartsPage({ cat, tf, rows, quotes, siteName: SITE_NAME });
+      const out = chartsPage({ cat, tf, set, rows, quotes, siteName: SITE_NAME });
       return sendHtml(
         res,
         page({
@@ -2095,6 +2136,7 @@ ${[...new Set(paths)].map(entry).join('\n')}
           title: out.title,
           description: out.description,
           canonical: out.canonical,
+          altPath: out.altPath,
           body: out.body,
           wide: true,
         }),
@@ -2110,13 +2152,25 @@ ${[...new Set(paths)].map(entry).join('\n')}
     // но порядок держим явным, как у форума на странице тикера
     if (url.pathname.startsWith('/charts/')) {
       const inst = instrumentBySlug(decodeURIComponent(url.pathname.split('/')[2] || ''));
+      // Набор по умолчанию на странице инструмента — тоже лишний параметр:
+      // canonical у неё один и без набора, и второй адрес был бы копией
+      const setRaw = String(url.searchParams.get('set') || '');
+      if (inst && isSet(setRaw) && setRaw === defaultSet(getLang())) {
+        url.searchParams.delete('set');
+        const qs2 = url.searchParams.toString();
+        res.writeHead(301, { Location: langHref(getLang(), url.pathname) + (qs2 ? `?${qs2}` : '') });
+        return res.end();
+      }
       if (!inst) {
         return sendHtml(res, notFoundPage({ siteUrl: SITE_URL, siteName: SITE_NAME }), { status: 404, cache: 'no-store' });
       }
       const tf = pickTf(req, url, CTF_ORDER, DEFAULT_CTF);
+      // Набор нужен только меню: список соседей внизу и подсветка категории.
+      // Сама страница инструмента одна и та же во всех наборах
+      const { set } = pickSet(url, 'all');
       const { series, quote } = await marketFeed.one(inst, tf);
       const liveQuote = liveForInstrument(inst, quote);
-      const out = instrumentPage({ inst, series, quote: liveQuote, tf, siteUrl: SITE_URL, siteName: SITE_NAME });
+      const out = instrumentPage({ inst, series, quote: liveQuote, tf, set, siteUrl: SITE_URL, siteName: SITE_NAME });
       return sendHtml(
         res,
         page({
@@ -2124,6 +2178,7 @@ ${[...new Set(paths)].map(entry).join('\n')}
           title: out.title,
           description: out.description,
           canonical: out.canonical,
+          altPath: out.altPath,
           body: out.body,
           jsonLd: out.jsonLd,
           // Та же ширина, что у сетки: меню стоит на одном месте на обеих
@@ -2141,22 +2196,23 @@ ${[...new Set(paths)].map(entry).join('\n')}
     // это дополнение к ссылкам, а не замена им
     if (url.pathname === '/api/board') {
       const catRaw = String(url.searchParams.get('cat') || 'all');
-      const cat = isCat(catRaw) ? catRaw : 'all';
+      const { set, cat } = pickSet(url, isCat(catRaw) ? catRaw : 'all');
       const tf = pickTf(req, url, CTF_ORDER, DEFAULT_CTF);
-      const { rows, quotes } = await marketFeed.board(cat, tf);
+      const { rows, quotes } = await marketFeed.board(cat, tf, { set });
       // Котировки индексов заменяются живыми: иначе карточка считает
       // процент по полю Мосбиржи «к предыдущей сделке»
       for (const r of rows) quotes[r.inst.key] = liveForInstrument(r.inst, quotes[r.inst.key]);
-      const out = chartsMeta({ cat, tf });
+      const out = chartsMeta({ cat, tf, set });
       return sendJsonGzip(req, res, 200, {
         at: new Date().toISOString(),
         cat,
+        set,
         tf,
         // Заголовок вкладки и описание называют категорию и интервал: без них
         // в браузере осталось бы название вкладки, которую уже не видно
         title: out.title,
         description: out.description,
-        html: chartsBoard({ cat, tf, rows, quotes }),
+        html: chartsBoard({ cat, tf, set, rows, quotes }),
       });
     }
 
@@ -2168,14 +2224,16 @@ ${[...new Set(paths)].map(entry).join('\n')}
         const inst = instrumentBySlug(slug);
         if (!inst) return sendJsonGzip(req, res, 404, { error: t('Инструмент не найден') });
         const tf = pickTf(req, url, CTF_ORDER, DEFAULT_CTF);
+        const { set } = pickSet(url, 'all');
         const { series, quote } = await marketFeed.one(inst, tf);
         return sendJsonGzip(req, res, 200, {
           tf,
+          set,
           title: t('{name}: {tf} график и цена', { name: t(inst.name), tf: t(CTF[tf].one) }),
           // Меню, h1 и график приходят одним куском: полоса интервалов стоит
           // над заголовком, и без неё в ответе отмеченный интервал остался бы
           // прежним, пока под ним уже нарисован новый ряд
-          html: instBoard({ inst, series, quote: liveForInstrument(inst, quote), tf }),
+          html: instBoard({ inst, series, quote: liveForInstrument(inst, quote), tf, set }),
         });
       }
       const market = SLUG_MARKET[String(url.searchParams.get('market') || '').toLowerCase()];
@@ -2233,15 +2291,16 @@ ${[...new Set(paths)].map(entry).join('\n')}
     }
 
     if (url.pathname === '/api/charts') {
-      const cat = isCat(String(url.searchParams.get('cat') || '')) ? String(url.searchParams.get('cat')) : 'all';
+      const catRaw = String(url.searchParams.get('cat') || '');
+      const { set, cat } = pickSet(url, isCat(catRaw) ? catRaw : 'all');
       const tf = pickTf(req, url, CTF_ORDER, DEFAULT_CTF);
-      const { rows, quotes } = await marketFeed.board(cat, tf);
+      const { rows, quotes } = await marketFeed.board(cat, tf, { set });
       // Котировки индексов заменяются живыми: иначе карточка считает
       // процент по полю Мосбиржи «к предыдущей сделке»
       for (const r of rows) quotes[r.inst.key] = liveForInstrument(r.inst, quotes[r.inst.key]);
       const cards = rows.map((r) => ({
         key: r.inst.key,
-        html: cardInnerHtml({ inst: r.inst, series: r.series, quote: quotes[r.inst.key], tf }),
+        html: cardInnerHtml({ inst: r.inst, series: r.series, quote: quotes[r.inst.key], tf, set }),
       }));
       return sendJsonGzip(req, res, 200, { at: new Date().toISOString(), poll: pollFor(tf), cards });
     }
