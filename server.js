@@ -70,6 +70,7 @@ import {
   pct as idxPct,
 } from './lib/index-render.js';
 import { homeRank, isTab, HOME_TABS } from './lib/home-rank.js';
+import { forumIndexPage, faqPage } from './lib/feed-pages.js';
 import {
   SITE_NAME,
   setQuoteMs,
@@ -1742,6 +1743,40 @@ const forumHtmlFor = (asset, user, { notice = '', error = '', title = '', body =
   });
 };
 
+// Актив по ключу кеша «РЫНОК:СИМВОЛ»: нужен сводным страницам форума и FAQ,
+// где запись приходит без ссылки на бумагу. Справочник, кеш, затем Viz —
+// тот же порядок, что у findAsset, но по одной строке ключа
+const assetOfKey = (key) => {
+  const [m, sym] = String(key || '').split(':');
+  return findAsset(m, sym);
+};
+
+// Все ветки сайта, свежие сверху, с числом ответов и временем последнего
+// сообщения. Число считается по всему поддереву: ответ на ответ тоже ответ
+const forumRows = () => {
+  const visible = forumStore.threads();
+  return visible
+    .map((thread) => {
+      const all = forumStore.messagesOf(thread.ticker);
+      const ids = new Set([thread.id]);
+      // Обход в ширину по parent: глубина не хранится, а вычисляется здесь же
+      let grew = true;
+      while (grew) {
+        grew = false;
+        for (const m of all) {
+          if (!ids.has(m.id) && ids.has(m.parent)) {
+            ids.add(m.id);
+            grew = true;
+          }
+        }
+      }
+      const inTree = all.filter((m) => ids.has(m.id));
+      const lastAt = inTree.reduce((acc, m) => (m.createdAt > acc ? m.createdAt : acc), thread.createdAt || '');
+      return { thread, asset: assetOfKey(thread.ticker), replies: ids.size - 1, lastAt };
+    })
+    .sort((a, b) => String(b.lastAt).localeCompare(String(a.lastAt)));
+};
+
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -1983,6 +2018,12 @@ const handleRequest = async (req, res, url) => {
 
     if (url.pathname === '/sitemap.xml') {
       const paths = ['/', '/catalog', '/catalog/ru', '/catalog/us', '/catalog/crypto'];
+      // FAQ — только когда вопросы есть: страница «вопросов пока нет» в индексе
+      // ничего не даёт, а после первого же вопроса попадёт туда сама
+      if (questionStore.all().some((q) => q && q.id && q.question && q.answer)) paths.push('/faq');
+      // Сводный форум попадает в карту только когда ветки есть: пустой список
+      // поисковику нечего индексировать, а страница «веток пока нет» — плохой вход
+      if (FORUM_ENABLED && forumStore.threads().length) paths.push('/forum');
       // Вкладки главной — не копии: у каждой свой заголовок, описание и канонический
       // адрес, поэтому в карту они идут отдельно. «Все» — это сам корень
       for (const t of HOME_TABS) if (t.key !== 'all') paths.push(`/?tab=${t.key}`);
@@ -2104,10 +2145,23 @@ ${[...[...new Set(paths)].map(entry), ...families.map(familyEntry)].join('\n')}
       const seg = url.pathname.split('/')[2] || '';
       const user = currentUser(req);
 
-      // Корень форума больше не нужен: обсуждения ищутся на странице бумаги
+      // Корень форума — сводный список всех веток сайта. Раньше он уводил в
+      // каталог: обсуждения живут при тикерах, и отдельного форума нет. Но
+      // человек, пришедший за «форумом», попадал в список бумаг, а пункт меню
+      // «Форум» вёл в то же место, что и «Капитализация». Список ничего не
+      // дублирует: сами ветки остаются на страницах тикеров, здесь только ссылки
       if (seg === '') {
-        res.writeHead(303, { Location: langHref(getLang(), '/catalog') });
-        return res.end();
+        const rows = forumRows();
+        return sendHtml(
+          res,
+          forumIndexPage({
+            siteUrl: SITE_URL,
+            siteName: SITE_NAME,
+            rows,
+            totalMessages: forumStore.messagesOf().length,
+          }),
+          { cache: 'public, max-age=120' }
+        );
       }
 
       if (seg === 'rules') return sendHtml(res, rulesPage({ siteUrl: SITE_URL }), { cache: 'public, max-age=3600' });
@@ -2227,6 +2281,23 @@ ${[...[...new Set(paths)].map(entry), ...families.map(familyEntry)].join('\n')}
       return sendHtml(res, forumNotFound({ siteUrl: SITE_URL }), { status: 404, cache: 'no-store' });
     }
 
+    // ------------------------------------------------------------ FAQ
+    // Сводная страница вопросов. Своих вопросов она не принимает: форма живёт
+    // на странице тикера, потому что вопрос без актива аналитику не о чем.
+    // Здесь только список ссылок на готовые ответы — он и нужен поисковику
+    if (url.pathname === '/faq' || url.pathname === '/faq/') {
+      const rows = questionStore
+        .all()
+        .filter((q) => q && q.id && q.question && q.answer)
+        .sort((a, b) => String(b.askedAt).localeCompare(String(a.askedAt)))
+        .map((rec) => ({ rec, asset: assetOfKey(rec.ticker) }));
+      return sendHtml(
+        res,
+        faqPage({ siteUrl: SITE_URL, siteName: SITE_NAME, rows }),
+        { cache: 'public, max-age=120' }
+      );
+    }
+
     // ------------------------------------------------------------ каталог
     if (url.pathname === '/catalog' || url.pathname.startsWith('/catalog/')) {
       const slug = url.pathname.split('/')[2];
@@ -2296,6 +2367,7 @@ ${[...[...new Set(paths)].map(entry), ...families.map(familyEntry)].join('\n')}
           altPath: out.altPath,
           body: out.body,
           wide: true,
+          active: 'charts',
         }),
         // Дневные и крупнее меняются раз в сутки, минутные — постоянно:
         // кешировать их одинаково значило бы показывать пятиминутную давность.
@@ -2370,6 +2442,7 @@ ${[...[...new Set(paths)].map(entry), ...families.map(familyEntry)].join('\n')}
           // доска и её инструменты индексируются обычными адресами
           noindex: true,
           wide: true,
+          active: 'charts',
         }),
         { cache: 'no-store' }
       );
