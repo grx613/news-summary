@@ -118,7 +118,10 @@ details.cat > summary:hover h2 { color: var(--accent); }
 .tl .n { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tl:hover .n { color: var(--text); }
 .nav { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 0 0 12px; font-size: 14px; padding: 10px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
-.nav a { margin: 0; }
+/* Подчёркивания у пунктов меню нет: это навигация, а не текст в абзаце.
+   Строка меню и без него читается как меню — рамки сверху и снизу */
+.nav a { margin: 0; text-decoration: none; }
+.nav a:hover { color: #7cb0ff; }
 /* Текущий раздел не выглядит ссылкой, но и не исчезает: человек видит, где он */
 .nav a.on { color: var(--text); font-weight: 600; }
 /* Меню переносится по строкам, а не уезжает за край: пять пунктов на узком
