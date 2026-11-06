@@ -588,6 +588,9 @@ a.gcard:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 @media (max-width: 640px) {
   .ggrid { grid-template-columns: 1fr; }
+  /* На телефоне наборы уже занимают две строки, и прижатая вправо настройка
+     висела бы одна под ними. В общий поток — она часть той же полосы */
+  .gsets .gcfg { margin-left: 0; }
   .gchart svg { height: 165px; }
   .gnav { margin-bottom: 16px; }
   .inst-chart .chart svg { height: 200px; }
