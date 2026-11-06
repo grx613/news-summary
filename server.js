@@ -129,7 +129,9 @@ import {
 } from './lib/forum.js';
 import {
   forumBlock,
+  threadForm,
   threadPage,
+  threadTree,
   loginPage,
   registerPage,
   accountPage,
@@ -1751,30 +1753,33 @@ const assetOfKey = (key) => {
   return findAsset(m, sym);
 };
 
-// Все ветки сайта, свежие сверху, с числом ответов и временем последнего
-// сообщения. Число считается по всему поддереву: ответ на ответ тоже ответ
-const forumRows = () => {
-  const visible = forumStore.threads();
-  return visible
-    .map((thread) => {
-      const all = forumStore.messagesOf(thread.ticker);
-      const ids = new Set([thread.id]);
-      // Обход в ширину по parent: глубина не хранится, а вычисляется здесь же
-      let grew = true;
-      while (grew) {
-        grew = false;
-        for (const m of all) {
-          if (!ids.has(m.id) && ids.has(m.parent)) {
-            ids.add(m.id);
-            grew = true;
-          }
-        }
-      }
-      const inTree = all.filter((m) => ids.has(m.id));
-      const lastAt = inTree.reduce((acc, m) => (m.createdAt > acc ? m.createdAt : acc), thread.createdAt || '');
-      return { thread, asset: assetOfKey(thread.ticker), replies: ids.size - 1, lastAt };
-    })
-    .sort((a, b) => String(b.lastAt).localeCompare(String(a.lastAt)));
+// Счётчики общего форума: сколько веток и сколько сообщений вместе с ответами.
+// Само дерево строит рендерер по всем сообщениям — второй обход здесь был бы
+// ещё одной копией логики вложенности
+const forumCounts = () => {
+  const all = forumStore.allMessages();
+  return { threads: all.filter((m) => !m.parent).length, messages: all.length };
+};
+
+// Поиск тикера по тому, что человек вписал в поле «Тикер» общего форума.
+// Принимаем и «SBER», и «ru:SBER», и «AAPL» — рынок ищется по всем трём
+// справочникам, потому что поле одно, а рынков три. Возвращаем ключ кеша:
+// тема хранится им же, и второй формы записи рынка не заводим
+const tickerFromInput = (raw) => {
+  const v = String(raw || '').trim();
+  if (!v) return null;
+  const [maybeMarket, maybeSym] = v.includes(':') ? v.split(':') : ['', v];
+  const hint = String(maybeMarket || '').toUpperCase();
+  const sym = String(maybeSym || '').trim().toUpperCase();
+  if (!sym) return null;
+  const order = ['RU', 'US', 'CRYPTO'].includes(hint) ? [hint] : ['RU', 'US', 'CRYPTO'];
+  for (const m of order) {
+    const a = findAsset(m, sym);
+    if (a) return cacheKey(a);
+  }
+  // Инструмент «Графиков»: символом там служит слаг, и «SP500» — это он
+  const viz = vizBySymbol(sym);
+  return viz ? cacheKey(viz) : null;
 };
 
 const MIME = {
@@ -2054,8 +2059,8 @@ const handleRequest = async (req, res, url) => {
       for (const q of questionStore.all()) {
         if (q.asset) paths.push(questionPath(q.asset, q));
       }
-      // Обсуждения индексируем мягко: темы лежат внутри страниц тикеров, ответы — часть темы.
-      // Отдельного раздела «форум» больше нет, поэтому в карте только правила
+      // Обсуждения: каждая ветка — свой адрес, ответы — часть темы. Общая тема
+      // живёт по /forum/<id>, тема по бумаге — внутри её страницы
       if (FORUM_ENABLED) {
         paths.push('/forum/rules');
         for (const t of forumStore.threads()) paths.push(threadPath(t));
@@ -2145,23 +2150,96 @@ ${[...[...new Set(paths)].map(entry), ...families.map(familyEntry)].join('\n')}
       const seg = url.pathname.split('/')[2] || '';
       const user = currentUser(req);
 
-      // Корень форума — сводный список всех веток сайта. Раньше он уводил в
-      // каталог: обсуждения живут при тикерах, и отдельного форума нет. Но
-      // человек, пришедший за «форумом», попадал в список бумаг, а пункт меню
-      // «Форум» вёл в то же место, что и «Капитализация». Список ничего не
-      // дублирует: сами ветки остаются на страницах тикеров, здесь только ссылки
+      // Корень форума — дерево всех веток сайта и форма новой темы. Раньше
+      // здесь был список ссылок, а писать можно было только на странице
+      // бумаги: чтобы открыть общую тему, приходилось сначала найти тикер.
+      // Теперь форум один, и тикер у ветки — необязательный признак
       if (seg === '') {
-        const rows = forumRows();
+        const counts = forumCounts();
+        const all = forumStore.allMessages();
+        // Свежие ветки сверху, ответы внутри своих корней: тот же порядок и
+        // тот же рендерер, что на странице тикера
+        const roots = forumStore.threads();
+        const { html: treeHtml, cut } = threadTree({ threads: roots, messages: all, max: 200, showTicker: true });
+        const formHtml = threadForm({ action: '/forum/thread', back: '/forum?new=1', me: user.me, ticker: '', error: '', title: '', body: '' });
         return sendHtml(
           res,
           forumIndexPage({
             siteUrl: SITE_URL,
             siteName: SITE_NAME,
-            rows,
-            totalMessages: forumStore.messagesOf().length,
+            treeHtml,
+            cut,
+            totalThreads: counts.threads,
+            totalMessages: counts.messages,
+            me: user.me,
+            account: user.account,
+            formHtml,
+            error: (url.searchParams.get('err') || '').slice(0, 200),
+            openForm: url.searchParams.get('new') === '1' || url.searchParams.get('err'),
           }),
-          { cache: 'public, max-age=120' }
+          // Дерево меняется с каждым сообщением, а форма и ник зависят от
+          // входа: в общий кеш такую страницу отдавать нельзя
+          { cache: user.me ? 'no-store' : 'public, max-age=60' }
         );
+      }
+
+      // Приём новой темы из общего форума. Отдельно от /ticker/.../thread:
+      // там ключ приходит из адреса, здесь — из необязательного поля
+      if (seg === 'thread') {
+        if (req.method !== 'POST') return redirect(res, '/forum');
+        if (!user.me) return redirect(res, `/forum/login?next=${encodeURIComponent('/forum?new=1')}`);
+        const bodyRaw = await readBody(req, 16 * 1024);
+        const form = new URLSearchParams(bodyRaw);
+        if (form.get('website')) return redirect(res, '/forum');
+        const title = String(form.get('title') || '').replace(/\s+/g, ' ').trim();
+        const body = String(form.get('body') || '');
+        const tickerRaw = String(form.get('ticker') || '').trim();
+        const key = tickerRaw ? tickerFromInput(tickerRaw) : '';
+        // Тикер вписан, но не найден — это ошибка, а не «сделаем общую тему»:
+        // человек думал, что привязывает ветку к бумаге
+        const unknown = tickerRaw && !key ? t('Тикер {t} не найден. Проверьте написание или оставьте поле пустым — получится общая тема.', { t: tickerRaw }) : null;
+        const bad = validateTitle(title) || validatePost(body) || unknown;
+        // Ошибка возвращает ту же страницу с заполненной формой: введённый
+        // текст не должен пропадать из-за опечатки в тикере
+        const formErr = (msg) => {
+          const tree = threadTree({ threads: forumStore.threads(), messages: forumStore.allMessages(), max: 200, showTicker: true });
+          const counts = forumCounts();
+          return sendHtml(
+            res,
+            forumIndexPage({
+              siteUrl: SITE_URL,
+              siteName: SITE_NAME,
+              treeHtml: tree.html,
+              cut: tree.cut,
+              totalThreads: counts.threads,
+              totalMessages: counts.messages,
+              me: user.me,
+              account: user.account,
+              formHtml: threadForm({ action: '/forum/thread', back: '/forum?new=1', me: true, title, body, ticker: tickerRaw, error: msg }),
+              error: msg,
+              openForm: true,
+            }),
+            { cache: 'no-store' }
+          );
+        };
+        if (bad) return formErr(bad);
+        const wait = ipBucket(ip, 'forum', 3600_000, MAX_FORUM_PER_HOUR);
+        if (wait) return formErr(t('Слишком часто. Попробуйте через {min} мин.', { min: Math.ceil(wait / 60) }));
+
+        const rec = forumStore.addMessage({
+          ticker: key || '',
+          parent: null,
+          title,
+          body,
+          lang: getLang(),
+          nick: user.account.nick,
+          key: user.key,
+          address: user.account.address,
+          host: await resolveHost(ip),
+          createdAt: new Date().toISOString(),
+        });
+        log(`форум: тема #${rec.id} от ${user.account.nick}${key ? ` (${key})` : ' (общая)'}`);
+        return redirect(res, threadPath(rec));
       }
 
       if (seg === 'rules') return sendHtml(res, rulesPage({ siteUrl: SITE_URL }), { cache: 'public, max-age=3600' });
@@ -2269,13 +2347,109 @@ ${[...[...new Set(paths)].map(entry), ...families.map(familyEntry)].join('\n')}
         return sendJson(res, ok ? 200 : 404, { ok });
       }
 
-      // /forum/<id> — старая ссылка на тему: переводим на адрес внутри тикера
+      // /forum/<id> — тема без актива, и он же старый адрес темы по тикеру.
+      // Ветка с бумагой живёт на странице этой бумаги, и второй полный текст
+      // здесь был бы её копией: уводим 301. Общая тема остаётся тут — другого
+      // места у неё нет
       const oldId = Number(seg);
       if (Number.isInteger(oldId) && oldId > 0) {
         const thread = forumStore.byId(oldId);
-        if (!thread || thread.hidden) return sendHtml(res, forumNotFound({ siteUrl: SITE_URL }), { status: 404, cache: 'no-store' });
-        res.writeHead(301, { Location: langHref(getLang(), threadPath(thread)) });
-        return res.end();
+        if (!thread || thread.hidden || thread.parent) {
+          return sendHtml(res, forumNotFound({ siteUrl: SITE_URL }), { status: 404, cache: 'no-store' });
+        }
+        if (thread.ticker) {
+          const keep = ['to', 'view']
+            .map((k) => (url.searchParams.get(k) ? `${k}=${encodeURIComponent(url.searchParams.get(k))}` : ''))
+            .filter(Boolean)
+            .join('&');
+          // Хвост /reply переезжает вместе с адресом: иначе отправка ответа
+          // по старой ссылке превратилась бы в GET страницы темы
+          const tail = url.pathname.split('/')[3] === 'reply' ? '/reply' : '';
+          // 307 на POST: 301 браузер выполняет как GET, и текст ответа
+          // потерялся бы по дороге
+          res.writeHead(req.method === 'POST' ? 307 : 301, {
+            Location: langHref(getLang(), threadPath(thread) + tail) + (keep ? `?${keep}` : ''),
+          });
+          return res.end();
+        }
+        const thLang = thread.lang || 'ru';
+        if (thLang !== getLang()) {
+          res.writeHead(301, { Location: langHref(thLang, threadPath(thread)) });
+          return res.end();
+        }
+
+        // Ответ в общую тему — тот же код, что у темы по тикеру: ветка, чужой
+        // parent, ханипот и лимит на IP
+        if (url.pathname.split('/')[3] === 'reply') {
+          if (req.method !== 'POST') return redirect(res, threadPath(thread) + '#reply');
+          if (!user.me) return redirect(res, `/forum/login?next=${encodeURIComponent(threadPath(thread))}`);
+          const bodyRaw = await readBody(req, 16 * 1024);
+          const form = new URLSearchParams(bodyRaw);
+          if (form.get('website')) return redirect(res, threadPath(thread));
+          const body = String(form.get('body') || '');
+          const bad = validatePost(body);
+          if (bad) {
+            return sendHtml(
+              res,
+              threadPage({
+                siteUrl: SITE_URL,
+                asset: null,
+                thread,
+                replies: forumStore.replies(thread.id),
+                me: user.me,
+                account: user.account,
+                to: Number(form.get('parent')) || 0,
+                error: bad,
+              }),
+              { cache: 'no-store' }
+            );
+          }
+          const wait = ipBucket(ip, 'forum', 3600_000, MAX_FORUM_PER_HOUR);
+          if (wait) {
+            return redirect(res, threadPath(thread) + '?err=' + encodeURIComponent(t('Слишком часто. Попробуйте через {min} мин.', { min: Math.ceil(wait / 60) })));
+          }
+          const wantParent = Number(form.get('parent')) || 0;
+          const inThread = (m) => {
+            let cur = m;
+            for (let i = 0; i < 30 && cur; i++) {
+              if (cur.id === thread.id) return true;
+              cur = cur.parent ? forumStore.byId(cur.parent) : null;
+            }
+            return false;
+          };
+          const cand = wantParent ? forumStore.byId(wantParent) : null;
+          const parentRec = cand && !cand.hidden && inThread(cand) ? cand : null;
+          const created = forumStore.addMessage({
+            // ticker пустой — так ответ и остаётся внутри общей ветки
+            ticker: '',
+            parent: parentRec ? parentRec.id : thread.id,
+            body,
+            nick: user.account.nick,
+            key: user.key,
+            address: user.account.address,
+            host: await resolveHost(ip),
+            createdAt: new Date().toISOString(),
+          });
+          return redirect(res, `${threadPath(thread)}#m${created.id}`);
+        }
+
+        const replies = forumStore.replies(thread.id);
+        const viewMsg = Number(url.searchParams.get('view')) || Number(url.searchParams.get('to')) || 0;
+        forumStore.addView(replies.some((r) => r.id === viewMsg) ? viewMsg : thread.id);
+        return sendHtml(
+          res,
+          threadPage({
+            siteUrl: SITE_URL,
+            asset: null,
+            thread,
+            replies,
+            me: user.me,
+            account: user.account,
+            to: Number(url.searchParams.get('to')) || 0,
+            error: (url.searchParams.get('err') || '').slice(0, 200),
+          }),
+          { cache: 'no-store' }
+        );
       }
 
       return sendHtml(res, forumNotFound({ siteUrl: SITE_URL }), { status: 404, cache: 'no-store' });
@@ -2366,7 +2540,6 @@ ${[...[...new Set(paths)].map(entry), ...families.map(familyEntry)].join('\n')}
           canonical: out.canonical,
           altPath: out.altPath,
           body: out.body,
-          wide: true,
           active: 'charts',
         }),
         // Дневные и крупнее меняются раз в сутки, минутные — постоянно:
@@ -2441,7 +2614,6 @@ ${[...[...new Set(paths)].map(entry), ...families.map(familyEntry)].join('\n')}
           // Страница личная и у каждого своя: в индекс её пускать незачем,
           // доска и её инструменты индексируются обычными адресами
           noindex: true,
-          wide: true,
           active: 'charts',
         }),
         { cache: 'no-store' }
@@ -2540,7 +2712,6 @@ ${[...[...new Set(paths)].map(entry), ...families.map(familyEntry)].join('\n')}
           jsonLd: out.jsonLd,
           // Та же ширина, что у сетки: меню стоит на одном месте на обеих
           // страницах, а не сдвигается вместе с границей колонки
-          wide: true,
         }),
         // Та же логика, что у сетки: минутный ряд живёт секунды, дневной — сутки,
         // а запомненный в куке интервал и скрытые карточки — своё у каждого

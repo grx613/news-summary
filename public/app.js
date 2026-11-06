@@ -644,22 +644,6 @@
   })();
   if (document.querySelector('[data-rt]')) rt.start(Number(document.body.dataset.quoteMs || 0));
 
-  // Меню языка — <details>, и сам по себе он закрывается только повторным
-  // кликом по коду. Клик мимо и Esc должны его отпускать: раскрытый список
-  // поверх меню сайта читается как часть шапки и мешает
-  const langDd = document.querySelector('.lang-dd');
-  if (langDd) {
-    document.addEventListener('click', (e) => {
-      if (langDd.open && !langDd.contains(e.target)) langDd.open = false;
-    });
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && langDd.open) {
-        langDd.open = false;
-        langDd.querySelector('summary')?.focus();
-      }
-    });
-  }
-
   // Кнопки отправки блокируем на время запроса, иначе двойной клик даёт два сообщения
   document.querySelectorAll('.forum-form').forEach((f) => {
     f.addEventListener('submit', () => {

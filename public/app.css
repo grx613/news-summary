@@ -9,23 +9,21 @@ a { color: var(--accent); }
 .wrap { max-width: 980px; margin: 0 auto; padding: 40px 20px 80px; position: relative; }
 h1 { margin: 0 0 6px; font-size: 27px; }
 h1 a { color: var(--text); text-decoration: none; }
-/* Шапка сайта: одна и та же на всех страницах — бренд, поиск, меню, язык.
-   Раньше логотип был отдельной строкой в каждом шаблоне, а поиск жил только
-   на главной; собранные по-разному, они расходились. Шапка — блок сетки:
-   бренд слева, поиск посередине, язык справа, меню строкой ниже */
-.site-head {
-  display: grid; grid-template-columns: auto 1fr auto; align-items: center;
-  gap: 14px 18px; margin: 0 0 14px;
-}
+/* Шапка сайта: одна и та же на всех страницах — бренд, меню, поиск.
+   Меню выше строки ввода нарочно: на страницу чаще приходят за разделом, чем
+   за словом. Раньше логотип был отдельной строкой в каждом шаблоне, а поиск жил
+   только на главной; собранные по-разному, они расходились */
+.site-head { margin: 0 0 14px; }
+.brand { margin: 0 0 4px; }
 .brand-a { display: inline-flex; flex-direction: column; line-height: 1.15; text-decoration: none; }
 .brand-name { font-size: 17px; font-weight: 700; color: var(--text); letter-spacing: .2px; }
 .brand-name::first-letter { color: var(--accent); }
 .brand-tag { font-size: 11.5px; color: var(--muted); letter-spacing: .3px; }
 .brand-a:hover .brand-tag { color: var(--accent); }
-/* Поиск в шапке ниже, чем на главной: он стоит рядом с брендом, а не
-   занимает всю ширину. На главной тот же #q крупнее — там это главное действие */
+/* Поиск в шапке ниже, чем был на главной: он идёт под меню, а не занимает
+   всю ширину первым. Крупнее он станет при фокусе, а не всегда */
+.hsearch { margin: 0; max-width: 560px; }
 .hsearch input { padding: 9px 14px; font-size: 14.5px; border-radius: 9px; }
-.lang-slot { justify-self: end; }
 .qa-h1, .post-h1 { font-size: 24px; line-height: 1.32; margin: 0 0 6px; max-width: 46em; }
 .sub { color: var(--muted); margin: 0 0 26px; font-size: 15px; }
 .sub b { color: var(--text); font-weight: 600; }
@@ -119,21 +117,7 @@ details.cat > summary:hover h2 { color: var(--accent); }
 .tl .s { font-weight: 700; font-variant-numeric: tabular-nums; min-width: 62px; color: var(--accent); }
 .tl .n { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tl:hover .n { color: var(--text); }
-/* Переключатель языка: в углу шапки, свёрнут в двухбуквенный код.
-   Абсолютное позиционирование, а не float: он не должен сдвигать меню и
-   заголовок, которые на разных страницах начинаются по-разному */
-.lang-dd { position: relative; z-index: 30; font-size: 13px; }
-.lang-dd > summary { list-style: none; display: inline-block; cursor: pointer; padding: 5px 11px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--muted); font-weight: 600; letter-spacing: .5px; user-select: none; }
-.lang-dd > summary::-webkit-details-marker { display: none; }
-.lang-dd > summary::after { content: '▾'; margin-left: 6px; font-size: 10px; }
-.lang-dd[open] > summary, .lang-dd > summary:hover { color: var(--text); border-color: var(--accent); }
-.lang-menu { list-style: none; margin: 6px 0 0; padding: 5px; position: absolute; right: 0; min-width: 148px; background: var(--card); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 12px 32px rgba(0,0,0,.45); }
-.lang-menu a { display: block; padding: 7px 12px; border-radius: 7px; color: var(--text); text-decoration: none; white-space: nowrap; }
-.lang-menu a:hover { background: #1f2630; }
-/* Свой язык не ссылка на себя, но и не исчезает: видно, где ты */
-.lang-menu a.on { color: var(--muted); cursor: default; }
-.lang-menu a.on::after { content: ' ✓'; color: var(--accent); }
-.nav { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 0 0 22px; font-size: 14px; padding: 10px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.nav { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 0 0 12px; font-size: 14px; padding: 10px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
 .nav a { margin: 0; }
 /* Текущий раздел не выглядит ссылкой, но и не исчезает: человек видит, где он */
 .nav a.on { color: var(--text); font-weight: 600; }
@@ -141,10 +125,7 @@ details.cat > summary:hover h2 { color: var(--accent); }
    экране в одну строку не влезают, и горизонтальная прокрутка прятала бы
    «Наш токен» целиком */
 @media (max-width: 700px) {
-  .site-head { grid-template-columns: 1fr auto; }
-  .hsearch { grid-column: 1 / -1; grid-row: 2; }
-  .brand-a { grid-column: 1; grid-row: 1; }
-  .lang-slot { grid-column: 2; grid-row: 1; }
+  .hsearch { max-width: none; }
 }
 /* Переключение интервала идёт запросом: без пометки блок кажется зависшим */
 [data-live].loading { opacity: .55; transition: opacity .12s; }
@@ -160,6 +141,11 @@ details.cat > summary:hover h2 { color: var(--accent); }
 .fbrand span { display: block; font-size: 11.5px; font-weight: 400; color: var(--muted); letter-spacing: .3px; }
 .fcol { display: flex; flex-direction: column; gap: 6px; }
 .fcol h4 { margin: 0 0 2px; font-size: 11.5px; text-transform: uppercase; letter-spacing: .7px; color: var(--text); }
+.flang { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; margin: 22px 0 0; }
+.flang span { font-size: 11.5px; text-transform: uppercase; letter-spacing: .7px; color: var(--text); }
+/* Свой язык не ссылка на себя, но и не исчезает: видно, где ты */
+.flang a.on { color: var(--text); cursor: default; }
+.flang a.on::after { content: ' ✓'; color: var(--accent); }
 .flegal { margin: 20px 0 0; padding-top: 14px; border-top: 1px solid var(--border); }
 @media (max-width: 700px) { .fgrid { grid-template-columns: 1fr 1fr; } .fabout { grid-column: 1 / -1; } }
 
@@ -428,11 +414,18 @@ a.ftree-row:hover .ft-text { color: var(--accent); }
 /* Прочерк вместо текста: сообщение пустое, открывать нечего — и ссылки нет */
 .ftree-row.empty { color: var(--muted); }
 .ft-empty { font-style: normal; color: var(--muted); }
-.ft-text { flex: 1 1 320px; min-width: 0; overflow-wrap: break-word; }
+/* Текст не растягивается: пометка тикера стоит сразу за ним, а не уезжает
+   к правому краю строки, где читается как отдельная колонка */
+.ft-text { flex: 0 1 auto; min-width: 0; overflow-wrap: break-word; }
 .ft-cnt { color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
 .ft-by { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
 .ft-nick { color: var(--text); font-weight: 500; }
 .ft-date { font-variant-numeric: tabular-nums; }
+/* Пометка тикера у корня ветки на общем форуме: на странице тикера она не
+   нужна — там все ветки про одно и та же подпись повторялась бы в каждой строке */
+.ft-main { flex: 1 1 320px; min-width: 0; display: flex; align-items: baseline; gap: 8px; }
+.ft-tk { flex: none; }
+.ftree-all { margin-top: 22px; }
 
 @media (max-width: 640px) {
   /* На телефоне отступ в 18px на глубине съедает ширину: уменьшаем вдвое */
@@ -486,9 +479,10 @@ a.ftree-row:hover .ft-text { color: var(--accent); }
 
 /* ---------------------------------------------- страница «Графики»
    Сетка карточек вместо одного большого графика: задача страницы — увидеть
-   весь рынок разом, а не разглядывать одну бумагу. Ширина шире обычной колонки
-   (980 px), иначе в ряд помещаются две карточки и сравнение теряет смысл */
-.wide { max-width: 1280px; }
+   весь рынок разом, а не разглядывать одну бумагу. Ширина у неё теперь общая,
+   ровно как у капитализации и тикера: своя, более широкая колонка сдвигала
+   левый край на 60 px, и раздел выглядел чужим на фоне остальных страниц.
+   Трём карточкам по 300 px хватает и 940 px содержимого */
 /* Меню «Графиков» стоит на обеих страницах сразу под меню сайта и с одинаковым
    отступом: при переходе между сеткой и инструментом кнопки не сдвигаются */
 .gnav { margin: 18px 0 22px; }
