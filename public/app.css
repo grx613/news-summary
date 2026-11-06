@@ -13,17 +13,21 @@ h1 a { color: var(--text); text-decoration: none; }
    Меню выше строки ввода нарочно: на страницу чаще приходят за разделом, чем
    за словом. Раньше логотип был отдельной строкой в каждом шаблоне, а поиск жил
    только на главной; собранные по-разному, они расходились */
-.site-head { margin: 0 0 14px; }
-.brand { margin: 0 0 4px; }
+/* Верхняя строка шапки: логотип и меню в одну линию, поиск — во всю ширину
+   под ней. Меню больше не отдельная полоса с рамками: рамка осталась одна,
+   под всей строкой, и шапка читается как одна шапка, а не как три блока */
+.site-head { margin: 0 0 18px; }
+.head-top { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px 26px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+.brand { margin: 0; }
 .brand-a { display: inline-flex; flex-direction: column; line-height: 1.15; text-decoration: none; }
 .brand-name { font-size: 17px; font-weight: 700; color: var(--text); letter-spacing: .2px; }
 .brand-name::first-letter { color: var(--accent); }
 .brand-tag { font-size: 11.5px; color: var(--muted); letter-spacing: .3px; }
 .brand-a:hover .brand-tag { color: var(--accent); }
-/* Поиск в шапке ниже, чем был на главной: он идёт под меню, а не занимает
-   всю ширину первым. Крупнее он станет при фокусе, а не всегда */
-.hsearch { margin: 0; max-width: 560px; }
-.hsearch input { padding: 9px 14px; font-size: 14.5px; border-radius: 9px; }
+/* Поиск во всю ширину макета: он главный вход на сайт, и половина колонки
+   под него — это половина подсказок, которых человек не видит */
+.hsearch { margin: 14px 0 0; max-width: none; }
+.hsearch input { padding: 10px 16px; font-size: 15.5px; border-radius: 10px; }
 .qa-h1, .post-h1 { font-size: 24px; line-height: 1.32; margin: 0 0 6px; max-width: 46em; }
 .sub { color: var(--muted); margin: 0 0 26px; font-size: 15px; }
 .sub b { color: var(--text); font-weight: 600; }
@@ -117,7 +121,7 @@ details.cat > summary:hover h2 { color: var(--accent); }
 .tl .s { font-weight: 700; font-variant-numeric: tabular-nums; min-width: 62px; color: var(--accent); }
 .tl .n { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tl:hover .n { color: var(--text); }
-.nav { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 0 0 12px; font-size: 14px; padding: 10px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.nav { display: flex; flex-wrap: wrap; gap: 6px 20px; margin: 0; font-size: 14.5px; padding: 0; }
 /* Подчёркивания у пунктов меню нет: это навигация, а не текст в абзаце.
    Строка меню и без него читается как меню — рамки сверху и снизу */
 .nav a { margin: 0; text-decoration: none; }
@@ -127,8 +131,11 @@ details.cat > summary:hover h2 { color: var(--accent); }
 /* Меню переносится по строкам, а не уезжает за край: пять пунктов на узком
    экране в одну строку не влезают, и горизонтальная прокрутка прятала бы
    «Наш токен» целиком */
+/* На телефоне верхней строке логотип и пять пунктов не уживаются в линию:
+   меню уходит под логотип, но остаётся тем же блоком */
 @media (max-width: 700px) {
-  .hsearch { max-width: none; }
+  .head-top { gap: 8px 16px; }
+  .nav { font-size: 14px; gap: 6px 16px; }
 }
 /* Переключение интервала идёт запросом: без пометки блок кажется зависшим */
 [data-live].loading { opacity: .55; transition: opacity .12s; }
@@ -486,25 +493,44 @@ a.ftree-row:hover .ft-text { color: var(--accent); }
    Трём карточкам по 300 px хватает и 940 px содержимого */
 /* Меню «Графиков» стоит на обеих страницах сразу под меню сайта и с одинаковым
    отступом: при переходе между сеткой и инструментом кнопки не сдвигаются */
-.gnav { margin: 18px 0 22px; }
-/* Полоса наборов рынков: мельче категорий нарочно — это выбор охвата, а не
-   переход по разделу, и выделяться она сильнее категорий не должна */
-.gsets { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
-.gset {
-  padding: 4px 12px; border-radius: 999px; font-size: 12.5px; text-decoration: none;
-  color: var(--muted); background: transparent; border: 1px solid var(--border);
-}
-.gset:hover { color: var(--text); border-color: var(--accent); }
-.gset.on { color: var(--text); background: var(--card); border-color: rgba(47,129,247,.6); }
-.gnav .gtabs { margin: 0 0 6px; }
-.gtabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 6px; }
+/* Одна строка: категории слева, справа интервал выпадающим списком и
+   настройка доски. Раньше это были три полосы друг под другом — наборы,
+   категории, восемь кнопок интервала, — и до карточек приходилось листать */
+.gnav { margin: 18px 0 22px; display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 10px 16px; }
+.gnav-right { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.gtabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; }
 .gtab {
   padding: 8px 18px; border-radius: 999px; font-size: 14.5px; text-decoration: none;
   color: var(--text); background: var(--card); border: 1px solid var(--border);
 }
 .gtab:hover { border-color: var(--accent); color: var(--accent); }
 .gtab.on { background: var(--accent); border-color: var(--accent); color: #fff; }
-.gperiods { margin: 10px 0 0; }
+/* Интервал: <details> с обычными ссылками внутри. Настоящий <option> без
+   скрипта не переходит по адресу, а ссылка работает и с выключенным JS,
+   и для поисковика */
+.tfdd { position: relative; }
+.tfdd > summary {
+  list-style: none; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+  padding: 8px 14px; border-radius: 999px; font-size: 14px; color: var(--text);
+  background: var(--card); border: 1px solid var(--border); white-space: nowrap;
+  /* Общее правило details summary делает подписи капсом: здесь это кнопка,
+     а не заголовок секции */
+  text-transform: none; letter-spacing: 0; margin: 0;
+}
+.tfdd > summary::-webkit-details-marker { display: none; }
+.tfdd > summary:hover { border-color: var(--accent); }
+.tfdd[open] > summary { border-color: var(--accent); }
+.tflab { color: var(--muted); }
+.tfcar { color: var(--muted); font-size: 11px; }
+.tfmenu {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 25; min-width: 148px;
+  display: flex; flex-direction: column; padding: 6px; border-radius: 12px;
+  background: var(--card); border: 1px solid var(--border); box-shadow: 0 12px 32px rgba(0,0,0,.45);
+}
+.tfopt { padding: 7px 12px; border-radius: 8px; font-size: 14px; color: var(--text); text-decoration: none; display: flex; justify-content: space-between; gap: 10px; }
+.tfopt:hover { background: #1f2630; }
+.tfopt.on { color: var(--accent); font-weight: 600; }
+.tfchk { font-size: 12px; }
 
 .ggrid {
   display: grid; gap: 14px;
@@ -571,7 +597,13 @@ a.gcard:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 }
 .ghidden button:hover { border-color: var(--accent); }
 .ghidden a { margin-left: 4px; }
-.gsets .gcfg { margin-left: auto; }
+/* Настройка доски — та же пилюля, что была в полосе наборов, только теперь
+   стоит справа от интервала */
+.gset {
+  padding: 8px 14px; border-radius: 999px; font-size: 13px; text-decoration: none;
+  color: var(--muted); background: transparent; border: 1px solid var(--border); white-space: nowrap;
+}
+.gset:hover { color: var(--text); border-color: var(--accent); }
 .gnone { margin: 6px 0 0; }
 /* Страница настройки: группы по категориям, внутри — столбцы галочек */
 .vform { margin-top: 10px; }
@@ -586,9 +618,9 @@ a.gcard:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 @media (max-width: 640px) {
   .ggrid { grid-template-columns: 1fr; }
-  /* На телефоне наборы уже занимают две строки, и прижатая вправо настройка
-     висела бы одна под ними. В общий поток — она часть той же полосы */
-  .gsets .gcfg { margin-left: 0; }
+  /* На телефоне категории и интервал не делят строку: интервал уходит под
+     них и занимает свой край, настройка остаётся рядом с ним */
+  .gnav-right { margin-left: 0; }
   .gchart svg { height: 165px; }
   .gnav { margin-bottom: 16px; }
   .inst-chart .chart svg { height: 200px; }

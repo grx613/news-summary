@@ -527,6 +527,24 @@
     }
   });
 
+  // Выпадающий список интервала закрывается по клику мимо и по Escape:
+  // <details> сам этого не делает, а открытый список поверх карточек читается
+  // как часть доски, а не как меню. После переключения он и так исчезает —
+  // полоса перерисовывается ответом сервера
+  const closeTf = (e) => {
+    const dd = document.getElementById('tf-dd');
+    if (!dd || !dd.open) return;
+    if (e.type === 'keydown') {
+      if (e.key !== 'Escape') return;
+      dd.open = false;
+      dd.querySelector('summary')?.focus();
+      return;
+    }
+    if (!dd.contains(e.target)) dd.open = false;
+  };
+  document.addEventListener('click', closeTf);
+  document.addEventListener('keydown', closeTf);
+
   // Кнопка «назад» после переключения должна возвращать прежний интервал
   // или прежнюю вкладку, а не прошлую страницу: адрес менялся через pushState
   window.addEventListener('popstate', (e) => {
