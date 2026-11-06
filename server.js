@@ -44,6 +44,7 @@ import {
   vizAsset,
   vizAssets,
   vizBySymbol,
+  newsPhrases,
 } from './lib/markets.js';
 import {
   chartsPage,
@@ -464,12 +465,22 @@ const VIZ_KIND = {
 const vizKind = (a) => VIZ_KIND[a.cat || INSTRUMENTS.find((i) => i.slug === a.slug)?.cat] || 'инструменту';
 
 const newsQuery = (a) => {
-  // Инструмент «Графиков» ищется по названию: биржевой ключ (@LCO.1, EUR=)
-  // в поиске не значит ничего, а «новости» расширяет выдачу в разы
-  if (a.market === 'VIZ') return `${a.name} новости`;
+  // Инструмент «Графиков» ищется по фразам из справочника: биржевой ключ
+  // (@LCO.1, EUR=) в поиске не значит ничего, а название целиком у половины
+  // записей состоит из общих слов. Первая фраза — основная
+  if (a.market === 'VIZ') {
+    const p = vizPhrases(a)[0];
+    return /новост/i.test(p) || !/[а-я]/i.test(p) ? p : `${p} новости`;
+  }
   if (a.market === 'CRYPTO') return `${a.name} ${a.symbol} crypto`;
   if (a.market === 'RU') return `${a.name} новости`;
   return `${a.name} ${a.symbol} stock`;
+};
+
+// Все фразы инструмента Viz: у остальных рынков она одна — название с тикером
+const vizPhrases = (a) => {
+  const inst = INSTRUMENTS.find((i) => i.slug === a.slug);
+  return inst ? newsPhrases(inst) : [a.name];
 };
 
 function tag(xml, name) {
@@ -497,24 +508,40 @@ function item({ title, link, source, published, snippet = '' }) {
 }
 
 async function bingNews(a) {
-  const url = `https://www.bing.com/news/search?q=${encodeURIComponent(newsQuery(a))}&format=rss&qft=sortbydate%3d%221%22`;
-  const res = await get(url, { timeout: 12000 });
-  if (!res.ok) throw new Error(`Bing ${res.status}`);
-  const xml = await res.text();
-  return rssItems(xml).map((it) => {
-    let link = decodeEntities(tag(it, 'link')).trim();
-    try {
-      const real = new URL(link).searchParams.get('url');
-      if (real) link = real;
-    } catch {}
-    return item({
-      title: tag(it, 'title'),
-      link,
-      source: stripTags(tag(it, 'News:Source')) || 'Bing News',
-      published: parseDate(tag(it, 'pubDate')),
-      snippet: tag(it, 'description'),
+  const one = async (q) => {
+    const url = `https://www.bing.com/news/search?q=${encodeURIComponent(q)}&format=rss&qft=sortbydate%3d%221%22`;
+    const res = await get(url, { timeout: 12000 });
+    if (!res.ok) throw new Error(`Bing ${res.status}`);
+    const xml = await res.text();
+    return rssItems(xml).map((it) => {
+      let link = decodeEntities(tag(it, 'link')).trim();
+      try {
+        const real = new URL(link).searchParams.get('url');
+        if (real) link = real;
+      } catch {}
+      return item({
+        title: tag(it, 'title'),
+        link,
+        source: stripTags(tag(it, 'News:Source')) || 'Bing News',
+        published: parseDate(tag(it, 'pubDate')),
+        snippet: tag(it, 'description'),
+      });
     });
-  });
+  };
+
+  // У инструмента Viz запросов несколько: один даёт 8–12 публикаций, и после
+  // фильтра релевантности от них остаётся меньше MIN_NEWS. Спрашиваем все
+  // фразы сразу — поиск дешёвый, а генерация по пустому списку всё равно
+  // не состоится. Ошибка одной фразы не отменяет остальные
+  if (a.market !== 'VIZ') return one(newsQuery(a));
+  // «новости» дописываем только к русской фразе: у английской этот хвост
+  // меняет выдачу в худшую сторону, а смысла не добавляет
+  const q = (p) => (/новост/i.test(p) || !/[а-я]/i.test(p) ? p : `${p} новости`);
+  const settled = await Promise.allSettled(vizPhrases(a).map((p) => one(q(p))));
+  const out = [];
+  for (const r of settled) if (r.status === 'fulfilled') out.push(...r.value);
+  if (!out.length) throw new Error('Bing News: ни одна фраза не дала ответа');
+  return out;
 }
 
 async function yahooNews(a) {
@@ -628,6 +655,9 @@ async function smartlabNews(a) {
 // так не умеет — он превращает «Газпром» в «газпр», а «Газпрома» в «газпром».
 // Латиницу не трогаем: префикс «appl» поймал бы «applied» и «appliances».
 function stemRu(w) {
+  // Число — не слово: «2-летние» и «10-летние» различаются ровно цифрой,
+  // а стем отрезал бы её вместе с окончанием и сделал инструменты неразличимыми
+  if (/^\d+$/.test(w)) return w;
   if (!/[а-я]/i.test(w)) return w;
   if (w.length <= 4) return w;
   if (w.length === 5) return w.slice(0, 4);
@@ -637,7 +667,7 @@ function stemRu(w) {
 const nameStems = (name) =>
   norm(name)
     .split(' ')
-    .filter((w) => w.length >= (w.match(/[a-z]/) ? 4 : 3))
+    .filter((w) => /^\d+$/.test(w) || w.length >= (w.match(/[a-z]/) ? 4 : 3))
     .map(stemRu);
 
 // Границы слов, а не подстрока: иначе «rain» находится в «training», а «T» — везде
@@ -656,11 +686,16 @@ function relevant(n, a, alsoSnippet = false) {
   const raw = `${n.title} ${alsoSnippet ? n.snippet : ''}`;
   if (a.market === 'CRYPTO' && !CRYPTO_CONTEXT.test(raw)) return false;
   // У инструмента «Графиков» символа в публикациях нет: «USD-RUB» — наш слаг,
-  // а не обозначение из новости. Поэтому судим только по названию, иначе
-  // «долл» ловил бы «доллар» в любой заметке про курсы
+  // а не обозначение из новости. Судим по фразам справочника и принимаем
+  // совпадение с любой из них: название целиком («Доходность 10-летних
+  // Германии») требует всех своих слов сразу, и такой публикации не находится
+  // ни одной, а «доходность облигаций Германии» находит
   if (a.market === 'VIZ') {
-    const stems = nameStems(a.name);
-    return stems.length > 0 && stems.every((s) => hasWord(norm(raw), s));
+    const hay = norm(raw);
+    return vizPhrases(a).some((p) => {
+      const stems = nameStems(p);
+      return stems.length > 0 && stems.every((s) => hasWord(hay, s));
+    });
   }
   const hay = norm(raw);
   const stems = nameStems(a.name);
