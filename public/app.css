@@ -43,7 +43,7 @@ h1 a { color: var(--text); text-decoration: none; }
 .tag.US { color: var(--accent); border-color: rgba(47,129,247,.5); }
 .hint { padding: 10px 16px; color: var(--muted); font-size: 14px; }
 
-.recent { margin-top: 14px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; color: var(--muted); font-size: 13px; }
+.recent { margin: 16px 0 0; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; color: var(--muted); font-size: 13px; }
 .chip { padding: 4px 12px; border-radius: 999px; background: var(--card); border: 1px solid var(--border); color: var(--text); cursor: pointer; font-size: 13px; text-decoration: none; }
 .chip:hover { border-color: var(--accent); }
 
@@ -440,8 +440,6 @@ a.ftree-row:hover .ft-text { color: var(--accent); }
 /* Таблица на главной: тикеры по капитализации, как на биржевых витринах.
    Числа справа моноширинными цифрами — иначе столбцы прыгают при прокрутке */
 .rank { margin-top: 24px; }
-.rank .head { margin-bottom: 4px; }
-.rank .lead { color: var(--muted); font-size: 14px; margin: 0 0 12px; }
 .tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
 .tabs .tab {
   padding: 6px 14px; border-radius: 999px; font-size: 13.5px; text-decoration: none;
