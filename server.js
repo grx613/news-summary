@@ -41,6 +41,9 @@ import {
   HIDE_COOKIE,
   parseHidden,
   hiddenValue,
+  vizAsset,
+  vizAssets,
+  vizBySymbol,
 } from './lib/markets.js';
 import {
   chartsPage,
@@ -55,7 +58,16 @@ import {
   settingsPath,
 } from './lib/market-render.js';
 import { chartBlock, tfList, DEFAULT_TF, fmtPrice } from './lib/chart-render.js';
-import { indexPage, indicesPage, homeIndices, val as idxVal, signed as idxSigned, pct as idxPct } from './lib/index-render.js';
+import {
+  indexSeo,
+  indexSections,
+  indicesPage,
+  homeIndices,
+  instrumentSlugOfIndex,
+  val as idxVal,
+  signed as idxSigned,
+  pct as idxPct,
+} from './lib/index-render.js';
 import { homeRank, isTab, HOME_TABS } from './lib/home-rank.js';
 import {
   SITE_NAME,
@@ -73,6 +85,9 @@ import {
   dividendsPage,
   notFoundPage,
   page,
+  summaryCard,
+  noSummaryCard,
+  qaBlock,
 } from './lib/render.js';
 import {
   langFromPath,
@@ -309,7 +324,7 @@ function saveCache() {
 }
 
 // ---------------------------------------------------------------- поиск тикеров
-const TYPES = { RU: 'Акция MOEX', US: 'Stock', CRYPTO: 'Crypto', ETF: 'ETF', INDEX: 'Index' };
+const TYPES = { RU: 'Акция MOEX', US: 'Stock', CRYPTO: 'Crypto', ETF: 'ETF', INDEX: 'Index', VIZ: 'Инструмент Viz' };
 
 function cleanUSName(name = '', type = '') {
   let n = name;
@@ -397,6 +412,15 @@ async function resolveAsset({ symbol, name, type, market }) {
   const s = symbol.trim();
   let m = (market || type || '').toUpperCase();
 
+  // Инструмент «Графиков» приходит из своей страницы, а не из поиска: ни в
+  // каталоге, ни в списке тикеров его нет, и поиск по слову вернул бы чужую
+  // бумагу. Слаг известен точно, поэтому восстанавливаем запись из справочника
+  if (m === 'VIZ') {
+    const inst = vizBySymbol(s);
+    if (!inst) throw Object.assign(new Error(t('Инструмент не найден')), { status: 404 });
+    return inst;
+  }
+
   // Название из кеша главнее — по нему ищутся новости
   const known = cache[`${m}:${s}`.toUpperCase()]?.asset;
   if (!name && known?.name) name = known.name;
@@ -423,7 +447,26 @@ async function resolveAsset({ symbol, name, type, market }) {
 // ---------------------------------------------------------------- источники новостей
 // Формулировки подобраны по живой выдаче Bing: хвост «акции» отсекает половину результатов,
 // а «новости» наоборот расширяет выдачу в 2-10 раз. Релевантность всё равно проверит фильтр.
+// Источник инструмента Viz: у сохранённой записи он рядом, у восстановленной
+// из адреса — в справочнике. От него зависит, спрашивать ли русские ленты
+const vizSource = (a) => a.source || INSTRUMENTS.find((i) => i.slug === a.slug)?.source || '';
+
+// Категория инструмента в дательном падеже — для первой строки промпта.
+// У доходности и товара род другой, и «по валютной паре Нефть Brent» читалось
+// бы как ошибка, поэтому категории разные, а не одна общая «инструменту»
+const VIZ_KIND = {
+  indices: 'индексу',
+  bonds: 'долговому инструменту',
+  energy: 'товару',
+  metals: 'товару',
+  currencies: 'валютной паре',
+};
+const vizKind = (a) => VIZ_KIND[a.cat || INSTRUMENTS.find((i) => i.slug === a.slug)?.cat] || 'инструменту';
+
 const newsQuery = (a) => {
+  // Инструмент «Графиков» ищется по названию: биржевой ключ (@LCO.1, EUR=)
+  // в поиске не значит ничего, а «новости» расширяет выдачу в разы
+  if (a.market === 'VIZ') return `${a.name} новости`;
   if (a.market === 'CRYPTO') return `${a.name} ${a.symbol} crypto`;
   if (a.market === 'RU') return `${a.name} новости`;
   return `${a.name} ${a.symbol} stock`;
@@ -612,6 +655,13 @@ const CRYPTO_CONTEXT =
 function relevant(n, a, alsoSnippet = false) {
   const raw = `${n.title} ${alsoSnippet ? n.snippet : ''}`;
   if (a.market === 'CRYPTO' && !CRYPTO_CONTEXT.test(raw)) return false;
+  // У инструмента «Графиков» символа в публикациях нет: «USD-RUB» — наш слаг,
+  // а не обозначение из новости. Поэтому судим только по названию, иначе
+  // «долл» ловил бы «доллар» в любой заметке про курсы
+  if (a.market === 'VIZ') {
+    const stems = nameStems(a.name);
+    return stems.length > 0 && stems.every((s) => hasWord(norm(raw), s));
+  }
   const hay = norm(raw);
   const stems = nameStems(a.name);
   if (stems.length && stems.every((s) => hasWord(hay, s))) return true;
@@ -652,6 +702,13 @@ async function moexNews(a) {
 
 function sourceList(a) {
   const list = [['Bing News', () => bingNews(a)]];
+  // Инструменту Viz русские ленты подходят, только если он про российский
+  // рынок; мировому они дают чужие публикации. Yahoo и Reddit ищут по тикеру,
+  // которого у инструмента нет, поэтому не спрашиваются вовсе
+  if (a.market === 'VIZ') {
+    if (vizSource(a) === 'moex') list.push(['Финам', () => finamNews(a)], ['Smart-Lab', () => smartlabNews(a)]);
+    return list;
+  }
   if (a.market === 'RU') {
     list.push(['Финам', () => finamNews(a)], ['Smart-Lab', () => smartlabNews(a)], ['Мосбиржа', () => moexNews(a)]);
   } else {
@@ -853,8 +910,13 @@ function buildPrompt(a, news) {
     })
     .join('\n');
 
-  const kind = { CRYPTO: 'криптовалюте', RU: 'российской акции', US: 'акции' }[a.market] || 'активу';
-  return `Ниже подборка публикаций по ${kind} ${a.name} (${a.symbol}) за последние дни.
+  // Род в первой строке промпта задаёт и род всей сводки: «по российской
+  // акции Доллар к рублю» модель поняла бы как опечатку и написала бы про акции.
+  // У инструмента «Графиков» категория и есть род: индекс, валютная пара,
+  // товар, доходность или облигация
+  const kind = a.market === 'VIZ' ? vizKind(a) : { CRYPTO: 'криптовалюте', RU: 'российской акции', US: 'акции' }[a.market] || 'активу';
+  const subject = a.market === 'VIZ' ? t(a.name) : `${a.name} (${a.symbol})`;
+  return `Ниже подборка публикаций по ${kind} ${subject} за последние дни.
 
 ${list}
 
@@ -1464,6 +1526,16 @@ const crawler = createCrawler({
     // у крона графиков. Четыре лишних генерации в сутки стоят меньше рубля
     const items = [...(u?.items || [])];
     const known = new Set(items.map((a) => cacheKey(a)));
+    // Инструменты «Графиков» в дневную вселенную не входят: их собирает
+    // справочник рынков, а не биржевой скрин. Но сводка, форум и вопросы у них
+    // те же, что у тикера, и без этой строки их страницы оставались бы пустыми
+    // навсегда — крон обновлял бы только бумаги каталога
+    for (const a of vizAssets()) {
+      const k = cacheKey(a);
+      if (known.has(k)) continue;
+      known.add(k);
+      items.push(a);
+    }
     for (const rec of Object.values(cache)) {
       const a = rec?.asset;
       if (!a?.symbol || !a.market) continue;
@@ -1555,14 +1627,20 @@ function knownSymbols() {
   return set;
 }
 
+// Каталог — про бумаги и монеты. Инструмент «Графиков» живёт на своей вкладке
+// со своим адресом, и в алфавитном списке бумаг он был бы ссылкой не туда
+const IN_CATALOG = new Set(['RU', 'US', 'CRYPTO']);
+
 function marketGroups() {
   const groups = { RU: [], US: [], CRYPTO: [] };
-  for (const a of universeItems()) (groups[a.market] || (groups[a.market] = [])).push(a);
+  for (const a of universeItems()) {
+    if (IN_CATALOG.has(a.market)) groups[a.market].push(a);
+  }
   // В каталог попадают и тикеры вне ежедневного списка, если они уже собраны
   const known = new Set(universeItems().map((a) => `${a.market}:${a.symbol}`));
   for (const rec of Object.values(cache)) {
     const k = `${rec.asset.market}:${rec.asset.symbol}`;
-    if (!known.has(k) && groups[rec.asset.market]) {
+    if (!known.has(k) && IN_CATALOG.has(rec.asset.market)) {
       groups[rec.asset.market].push(rec.asset);
       known.add(k);
     }
@@ -1572,6 +1650,7 @@ function marketGroups() {
 
 function cachedRecent(limit = 14) {
   return Object.values(cache)
+    .filter((r) => IN_CATALOG.has(r?.asset?.market))
     .sort((a, b) => String(b.generatedAt).localeCompare(String(a.generatedAt)))
     .slice(0, limit);
 }
@@ -1581,11 +1660,23 @@ function findAsset(market, symbol) {
   const m = String(market || '').toUpperCase();
   const hit = cache[`${m}:${sym}`]?.asset;
   if (hit) return hit;
+  // Инструменты «Графиков» в списке бумаг не лежат: их справочник свой.
+  // Восстанавливаем объект из слага, поэтому форум и вопросы открываются
+  // даже до того, как по инструменту собрана сводка
+  if (m === 'VIZ') return vizBySymbol(sym);
   return universeItems().find((a) => a.market === m && a.symbol.toUpperCase() === sym) || null;
 }
 
 // Соседние тикеры того же рынка: по алфавиту вокруг текущего
 function relatedAssets(asset, limit = 10) {
+  // У инструмента «Графиков» соседи — своя категория: «другие валюты» полезнее
+  // случайных бумаг каталога, которых рядом с индексом просто нет
+  if (asset.market === 'VIZ') {
+    const own = INSTRUMENTS.find((i) => i.slug === asset.slug);
+    return INSTRUMENTS.filter((i) => i.cat === own?.cat && i.slug !== asset.slug)
+      .map(vizAsset)
+      .slice(0, limit);
+  }
   const items = (marketGroups()[asset.market] || []).filter((a) => a.symbol !== asset.symbol);
   const sorted = [...items].sort((x, y) => String(x.name).localeCompare(String(y.name), 'ru'));
   const i = Math.max(
@@ -1875,10 +1966,9 @@ const handleRequest = async (req, res, url) => {
       for (const i of INSTRUMENTS) paths.push(instrumentPath(i));
       // Индексы попадают в карту только со значениями: страница из одних прочерков
       // поисковику бесполезна, а после первого прохода крона значения есть всегда
-      if (indexCrawler.status().stored) {
-        paths.push('/indices');
-        for (const i of INDEXES) paths.push(`/index/${i.slug}`);
-      }
+      // Отдельных /index/<слаг> больше нет: страница индекса — это страница
+      // инструмента, и её адрес уже добавлен выше, в цикле по INSTRUMENTS
+      if (indexCrawler.status().stored) paths.push('/indices');
       for (const a of universeItems()) paths.push(tickerPath(a));
       for (const rec of Object.values(cache)) {
         const p = tickerPath(rec.asset);
@@ -1915,7 +2005,14 @@ const handleRequest = async (req, res, url) => {
       }
       // Значения индексов обновляются чаще всего остального на сайте
       const quotesAt = indexStore.quotesAt();
-      if (quotesAt) for (const i of INDEXES) mod.set(`/index/${i.slug}`, quotesAt);
+      // Значение индекса меняется чаще всего остального на его странице,
+      // поэтому дата обновления — время котировок, а не сводки
+      if (quotesAt) {
+        for (const i of INDEXES) {
+          const slug = instrumentSlugOfIndex(i);
+          if (slug) mod.set(`/charts/${slug}`, quotesAt);
+        }
+      }
       if (FORUM_ENABLED) {
         for (const t of forumStore.threads()) if (t.createdAt) mod.set(threadPath(t), t.createdAt);
       }
@@ -2243,6 +2340,21 @@ ${[...[...new Set(paths)].map(entry), ...families.map(familyEntry)].join('\n')}
       );
     }
 
+    // Подстраницы инструмента — тема, ответ, вопрос — обслуживаются теми же
+    // обработчиками, что и у тикера каталога. Вместо второй копии тех же ста
+    // строк адрес переписывается во внутренний вид /ticker/viz/<символ>/…:
+    // рынок VIZ и слаг в роли символа уже понимают findAsset, tickerPath и
+    // threadPath, поэтому обратно человек попадает на /charts/<слаг>, а не в
+    // /ticker/. Наружу этот вид не выходит — он живёт только внутри запроса
+    if (url.pathname.startsWith('/charts/')) {
+      const seg = url.pathname.split('/'); // ['', 'charts', слаг, хвост, …]
+      const vizInst = seg[2] ? instrumentBySlug(decodeURIComponent(seg[2])) : null;
+      const tail = seg[3] || '';
+      if (vizInst && (tail === 'thread' || tail === 'forum' || tail === 'ask')) {
+        url.pathname = `/ticker/viz/${encodeURIComponent(vizInst.slug.toUpperCase())}/` + seg.slice(3).join('/');
+      }
+    }
+
     // Подстраницы инструментов обязаны стоять до общего правила /charts:
     // страница сетки смотрит только на точный путь и лишние сегменты не увидит,
     // но порядок держим явным, как у форума на странице тикера
@@ -2267,7 +2379,47 @@ ${[...[...new Set(paths)].map(entry), ...families.map(familyEntry)].join('\n')}
       const hidden = hiddenOf(req);
       const { series, quote } = await marketFeed.one(inst, tf);
       const liveQuote = liveForInstrument(inst, quote);
-      const out = instrumentPage({ inst, series, quote: liveQuote, tf, set, hidden, siteUrl: SITE_URL, siteName: SITE_NAME });
+      // Инструмент получает ту же начинку, что и тикер каталога: сводку с
+      // кнопкой обновления, вопросы аналитику и обсуждение. Ключ у них свой
+      // (VIZ:USD-RUB), поэтому хранилища общие и заводить второе незачем
+      const viz = vizAsset(inst);
+      const vizKey = cacheKey(viz);
+      const rec = cache[vizKey] ? { ...cache[vizKey], ...meta(cache[vizKey], true) } : null;
+      const user = currentUser(req);
+      // Восемь индексов несут на этой странице ещё значение, состав и историю:
+      // отдельный /index/<слаг> был вторым адресом того же индекса со своим
+      // canonical, и поисковик выбирал между копиями сам
+      // Связь односторонняя: indexSlug лежит у инструмента, а у индекса —
+      // свой слаг, и он не совпадает (rgbia ↔ rgbi, dowjones ↔ dow-jones)
+      const idx = inst.indexSlug ? INDEXES.find((i) => i.slug === inst.indexSlug) || null : null;
+      const idxQuote = idx ? realtime.overlay(idx.code, indexStore.quote(idx.code)) : null;
+      const out = instrumentPage({
+        inst,
+        series,
+        quote: liveQuote,
+        tf,
+        set,
+        hidden,
+        siteUrl: SITE_URL,
+        siteName: SITE_NAME,
+        rec,
+        summaryHtml: rec ? summaryCard(rec) : noSummaryCard(viz),
+        qaHtml: qaBlock({ asset: viz, questions: questionStore.byTicker(vizKey), formAction: langHref(getLang(), `${tickerPath(viz)}/ask`) }),
+        forumHtml: forumHtmlFor(viz, user, {
+          notice: (url.searchParams.get('ok') || '').slice(0, 140),
+          error: (url.searchParams.get('err') || '').slice(0, 300),
+        }),
+        indexHtml: idx
+          ? indexSections({
+              idx,
+              quote: idxQuote,
+              history: indexStore.history(idx.code),
+              composition: indexStore.composition(idx.code),
+              knownSymbols: knownSymbols(),
+            })
+          : '',
+        seo: idx ? indexSeo({ idx, quote: idxQuote }) : null,
+      });
       return sendHtml(
         res,
         page({
@@ -2420,36 +2572,25 @@ ${[...[...new Set(paths)].map(entry), ...families.map(familyEntry)].join('\n')}
 
     if (url.pathname.startsWith('/index/')) {
       const idx = bySlug(decodeURIComponent(url.pathname.split('/')[2] || ''));
-      if (!idx || !indexCrawler.status().stored) {
-        return sendHtml(res, notFoundPage({ siteUrl: SITE_URL, siteName: SITE_NAME }), { status: 404, cache: 'no-store' });
-      }
-      return sendHtml(
-        res,
-        indexPage({
-          idx,
-          // Живая цена поверх сохранённой: файл обновляется раз в пять минут,
-          // а страница обещает сегодняшнее значение
-          quote: realtime.overlay(idx.code, indexStore.quote(idx.code)),
-          history: indexStore.history(idx.code),
-          composition: indexStore.composition(idx.code),
-          knownSymbols: knownSymbols(),
-          siteUrl: SITE_URL,
-          siteName: SITE_NAME,
-        }),
-        { cache: 'public, max-age=120' }
-      );
+      const slug = idx ? instrumentSlugOfIndex(idx) : null;
+      if (!slug) return sendHtml(res, notFoundPage({ siteUrl: SITE_URL, siteName: SITE_NAME }), { status: 404, cache: 'no-store' });
+      const qsIdx = url.searchParams.toString();
+      res.writeHead(301, { Location: langHref(getLang(), `/charts/${slug}`) + (qsIdx ? `?${qsIdx}` : '') });
+      return res.end();
     }
 
     // ------------------------------------------------------------ вопрос по тикеру
     // POST /ticker/us/AAPL/ask: ответ собирается один раз и сохраняется как публичная страница
     if (url.pathname.startsWith('/ticker/') && url.pathname.endsWith('/ask')) {
-      if (req.method !== 'POST') {
-        res.writeHead(303, { Location: langHref(getLang(), url.pathname.replace(/\/ask$/, '')) });
-        return res.end();
-      }
       const [, , slugRaw, symRaw] = url.pathname.split('/');
       const market = SLUG_MARKET[String(slugRaw || '').toLowerCase()];
       const asset = market && symRaw ? findAsset(market, decodeURIComponent(symRaw)) : null;
+      // GET сюда не приходит: адрес переписан из /charts/<слаг>/ask, и обратно
+      // человека надо вести на страницу инструмента, а не на внутренний вид
+      if (req.method !== 'POST') {
+        res.writeHead(303, { Location: langHref(getLang(), asset ? tickerPath(asset) : '/catalog') });
+        return res.end();
+      }
       if (!asset) return sendHtml(res, notFoundPage({ siteUrl: SITE_URL, siteName: SITE_NAME }), { status: 404, cache: 'no-store' });
 
       const bodyRaw = await readBody(req, 8 * 1024);
@@ -2469,7 +2610,11 @@ ${[...[...new Set(paths)].map(entry), ...families.map(familyEntry)].join('\n')}
         res.writeHead(303, {
           Location:
             `${langHref(getLang(), tickerPath(asset))}?err=` +
-            encodeURIComponent(t('Сначала соберите сводку по тикеру — вопрос отвечается по её публикациям.')),
+            encodeURIComponent(
+              asset.market === 'VIZ'
+                ? t('Сначала соберите сводку по этому инструменту — вопрос отвечается по её публикациям.')
+                : t('Сначала соберите сводку по тикеру — вопрос отвечается по её публикациям.')
+            ),
         });
         return res.end();
       }
@@ -2519,7 +2664,9 @@ ${[...[...new Set(paths)].map(entry), ...families.map(familyEntry)].join('\n')}
         const stored = questionStore.add({
           id: `${hash}-${slugify(ans.title || question, 48) || 'vopros'}`,
           ticker: key,
-          asset: { symbol: asset.symbol, name: niceName(asset.name), market: asset.market },
+          // У инструмента «Графиков» в записи нужен слаг: символ вопроса —
+          // слаг, и восстановить по нему страницу иначе не из чего
+          asset: { symbol: asset.symbol, name: niceName(asset.name), market: asset.market, ...(asset.slug ? { slug: asset.slug } : {}) },
           question,
           // Язык, на котором задан вопрос: на нём же написан ответ, и другого
           // перевода у страницы нет. По нему строится canonical и hreflang
@@ -2755,6 +2902,17 @@ ${[...[...new Set(paths)].map(entry), ...families.map(familyEntry)].join('\n')}
     if (url.pathname.startsWith('/ticker/')) {
       const [, , slugRaw, symRaw] = url.pathname.split('/');
       const market = SLUG_MARKET[String(slugRaw || '').toLowerCase()];
+      // У инструмента «Графиков» страница одна — со свечами. Второго адреса
+      // /ticker/viz/… в индексе быть не должно, поэтому ведём на неё
+      if (market === 'VIZ') {
+        const inst = symRaw ? vizBySymbol(decodeURIComponent(symRaw)) : null;
+        if (!inst) {
+          return sendHtml(res, notFoundPage({ siteUrl: SITE_URL, siteName: SITE_NAME }), { status: 404, cache: 'no-store' });
+        }
+        const qs3 = url.searchParams.toString();
+        res.writeHead(301, { Location: langHref(getLang(), tickerPath(inst)) + (qs3 ? `?${qs3}` : '') });
+        return res.end();
+      }
       const asset = market && symRaw ? findAsset(market, decodeURIComponent(symRaw)) : null;
       if (!asset) {
         return sendHtml(res, notFoundPage({ siteUrl: SITE_URL, siteName: SITE_NAME }), { status: 404, cache: 'no-store' });
