@@ -523,9 +523,15 @@ a.gcard:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   background: var(--card); border: 1px solid var(--border); border-radius: 12px;
   padding: 14px 14px 10px; display: flex; flex-direction: column; min-width: 0;
 }
-.ghead { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-.gname { font-size: 14.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.gsym { color: var(--muted); font-size: 12px; white-space: nowrap; }
+/* Две строки под название оставлены всегда, даже если оно короткое: иначе
+   цена в соседних карточках ряда стояла бы на разной высоте, и сравнение
+   значений — то, ради чего эта сетка существует, — разваливалось */
+.ghead { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; min-height: 3.1em; }
+/* Название переносится на вторую строку, а не обрезается: в колонке 940 px
+   карточка уже 304 px, и «Индекс гособлигаций RGBI» многоточием терял именно
+   то слово, по которому его ищут. Высота карточек в ряду выравнивается сеткой */
+.gname { font-size: 14.5px; font-weight: 600; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.gsym { color: var(--muted); font-size: 12px; white-space: nowrap; padding-top: 3px; }
 .gvals { display: flex; align-items: baseline; gap: 10px; margin: 6px 0 2px; }
 .gprice { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .gchg { font-size: 13px; font-variant-numeric: tabular-nums; }
